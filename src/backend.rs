@@ -628,6 +628,9 @@ pub enum Command {
         config: ProxyConfig,
     },
     CancelSignIn,
+    /// Retry a paused Web API source using its existing grant, without a browser.
+    RetryQuota(ApiSource),
+    ReconnectWebApi(ApiSource),
     SignOut,
     /// Authorize local playback on this computer (a separate browser grant).
     AuthorizePlayback,
@@ -864,6 +867,7 @@ pub enum Event {
     },
     Auth(AuthStatus),
     Playback(LocalPlayback),
+    WebAccessReady,
     /// Receivers seen on the local network that Spotify has not listed.
     Receivers(Vec<crate::zeroconf::Receiver>),
     ReceiverActivated {
@@ -990,6 +994,7 @@ pub struct Backend {
     events: std::sync::mpsc::Receiver<Event>,
     art: ArtLoader,
     activity: Arc<NetActivity>,
+    api: Arc<ApiGateway>,
     thread: Option<std::thread::JoinHandle<()>>,
     offline: bool,
     #[cfg(test)]
@@ -1051,8 +1056,9 @@ impl Backend {
         };
         let art = ArtLoader::new(http.clone(), runtime.handle().clone(), dirs.art_cache_dir());
         let activity = Arc::new(NetActivity::default());
+        let api = Arc::new(ApiGateway::new(http.clone(), activity.clone()));
 
-        let worker_activity = Arc::clone(&activity);
+        let worker_api = Arc::clone(&api);
         let worker_art = art.clone();
         let worker_commands = command_tx.clone();
         let thread = std::thread::Builder::new()
@@ -1065,7 +1071,7 @@ impl Backend {
                         web_client_id,
                         http,
                         worker_art,
-                        worker_activity,
+                        worker_api,
                         event_tx,
                         worker_commands,
                         waker,
@@ -1085,6 +1091,7 @@ impl Backend {
             events: event_rx,
             art,
             activity,
+            api,
             thread: Some(thread),
             offline: false,
             #[cfg(test)]
@@ -1121,6 +1128,22 @@ impl Backend {
     /// Live network activity, for the interface's busy indicator.
     pub fn activity(&self) -> &NetActivity {
         &self.activity
+    }
+
+    pub fn connection_state(&self, source: ApiSource) -> SessionState {
+        self.api.state(source)
+    }
+
+    pub fn quota_exhausted_sources(&self) -> Vec<ApiSource> {
+        [ApiSource::Shared, ApiSource::Personal]
+            .into_iter()
+            .filter(|source| self.api.verification_client(*source).quota_exhausted())
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_for_quota(&self, source: ApiSource) {
+        self.api.verification_client(source).pause_for_quota();
     }
 
     /// Stops Spotify-bound commands from leaving the process; artwork and
@@ -1667,7 +1690,7 @@ impl Worker {
         web_client_id: Option<String>,
         http: Http,
         art: ArtLoader,
-        activity: Arc<NetActivity>,
+        api: Arc<ApiGateway>,
         events: std::sync::mpsc::Sender<Event>,
         commands: mpsc::UnboundedSender<Command>,
         waker: Waker,
@@ -1691,7 +1714,7 @@ impl Worker {
             engine_config,
             engine_proxy: None,
             web_client_id,
-            api: Arc::new(ApiGateway::new(http.clone(), activity)),
+            api,
             made_for_you: Arc::new(crate::made_for_you::MadeForYou::new(http.clone())),
             connect: Arc::default(),
             background_session: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -2496,6 +2519,8 @@ impl Worker {
                 Command::ConfigurePersonalWebApp(client_id) => {
                     self.configure_personal_web_app(client_id)
                 }
+                Command::RetryQuota(source) => self.retry_quota(source),
+                Command::ReconnectWebApi(source) => self.reconnect_web_api(source),
             }
         }
         if let Some(engine) = self.engine.take() {
@@ -2646,6 +2671,11 @@ impl Worker {
         self.web_tokens[web_slot(source).index()] = Some(tokens.clone());
         self.api
             .begin_verification(source, TokenProvider::Web(tokens));
+        self.verify_web_grant(source, token);
+    }
+
+    fn verify_web_grant(&self, source: ApiSource, token: crate::auth::StoredToken) {
+        let lease = self.credentials.lease(web_slot(source));
         let client = self.api.verification_client(source);
         let gateway = Arc::clone(&self.api);
         let commands = self.commands.clone();
@@ -2668,8 +2698,7 @@ impl Worker {
                         });
                         return;
                     }
-                    Err(error @ ApiError::SignInExpired { .. }) => break error,
-                    Err(error) if error.status().is_some_and(|status| status < 500) => break error,
+                    Err(error) if !error.retry_verification() => break error,
                     Err(error) => {
                         log::warn!("Spotify sign-in verification will retry: {error}");
                         tokio::time::sleep(wait).await;
@@ -2709,6 +2738,9 @@ impl Worker {
             // A rejected refresh grant cannot restore a session next time.
             // Forget only this grant and ask for a fresh browser approval.
             self.forget_web_grant(source);
+        } else if matches!(error, ApiError::QuotaExhausted) {
+            // Keep the provider and grant for the explicit Try again action.
+            self.api.set_state(source, SessionState::Unavailable);
         } else {
             self.api.clear(source);
         }
@@ -2723,14 +2755,60 @@ impl Worker {
                 SessionState::Ready { .. }
             ),
         };
-        if source == ApiSource::Shared || !other_ready {
+        if !other_ready || source == ApiSource::Shared && !matches!(error, ApiError::QuotaExhausted)
+        {
             self.signed_in = false;
             self.emit(Event::Auth(AuthStatus::Failed(message.clone())));
         }
         self.emit(Event::Error(message));
     }
 
+    fn retry_quota(&mut self, source: ApiSource) {
+        let client = self.api.verification_client(source);
+        if !client.quota_exhausted() {
+            return;
+        }
+        if matches!(self.api.state(source), SessionState::Ready { .. }) {
+            client.retry_quota();
+            self.emit(Event::WebAccessReady);
+            return;
+        }
+        self.reconnect_web_api(source);
+    }
+
+    fn reconnect_web_api(&mut self, source: ApiSource) {
+        if self.authorizing_source.is_some() || self.cancel_signin.is_some() {
+            return;
+        }
+        if matches!(self.api.state(source), SessionState::Ready { .. }) {
+            return;
+        }
+        let Some(tokens) = self.web_tokens[web_slot(source).index()].clone() else {
+            self.sign_in_source(source);
+            return;
+        };
+        self.authorization_attempt += 1;
+        let attempt = self.authorization_attempt;
+        self.authorizing_source = Some(source);
+        self.api.set_state(source, SessionState::Authorizing);
+        if !self.signed_in {
+            self.emit(Event::Auth(AuthStatus::Connecting));
+        }
+        let lease = self.credentials.lease(web_slot(source));
+        let commands = self.commands.clone();
+        tokio::spawn(async move {
+            let token = tokens.snapshot().await;
+            let _ = commands.send(Command::WebSignedIn {
+                source,
+                token: Box::new(token),
+                lease,
+                attempt,
+            });
+        });
+    }
+
     fn on_web_verified(&mut self, source: ApiSource, token: crate::auth::StoredToken, user: User) {
+        let was_signed_in = self.signed_in;
         if !matches!(self.api.state(source), SessionState::Authorizing)
             || source == ApiSource::Personal
                 && self.web_client_id.as_deref() != Some(token.client_id.as_str())
@@ -2783,6 +2861,9 @@ impl Worker {
             }
         }
         self.finish_authorization(source);
+        if was_signed_in {
+            self.emit(Event::WebAccessReady);
+        }
     }
 
     fn finish_authorization(&mut self, source: ApiSource) {
@@ -5075,6 +5156,9 @@ async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiRespon
     let session = engine.session();
     let read = async {
         Some(match session_read(request)? {
+            SessionRead::Library => {
+                SessionAnswer::Library(settle(session_reads::library(session).await)?)
+            }
             SessionRead::Header { id } => SessionAnswer::Header(Box::new(settle(
                 session_reads::playlist(session, id).await,
             )?)),
@@ -5102,6 +5186,7 @@ async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiRespon
 /// where the session serves the operation.
 #[derive(Debug, PartialEq)]
 enum SessionRead<'a> {
+    Library,
     ArtistTop { id: &'a str },
     Header { id: &'a str },
     Rows { id: &'a str, offset: u32 },
@@ -5110,6 +5195,7 @@ enum SessionRead<'a> {
 
 fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
     Some(match request {
+        ApiRequest::MyPlaylists { offset: 0, .. } => SessionRead::Library,
         ApiRequest::ArtistTopTracks { id } => SessionRead::ArtistTop { id },
         ApiRequest::Playlist { id, .. } => SessionRead::Header { id },
         ApiRequest::PlaylistItems { id, offset, .. } => SessionRead::Rows {
@@ -5126,6 +5212,7 @@ fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
 
 /// What the session read: a playlist's header, or a page of its rows.
 enum SessionAnswer {
+    Library(ApiResult<Vec<Playlist>>),
     ArtistTop(ApiResult<Vec<Track>>),
     Header(Box<ApiResult<Playlist>>),
     Rows(ApiResult<Page<PlaylistItem>>),
@@ -5135,6 +5222,23 @@ enum SessionAnswer {
 /// offset, and generation so the app matches it to the page that asked.
 fn session_response(request: &ApiRequest, answer: SessionAnswer) -> Option<ApiResponse> {
     Some(match (request, answer) {
+        (
+            ApiRequest::MyPlaylists {
+                offset: 0,
+                generation,
+            },
+            SessionAnswer::Library(result),
+        ) => ApiResponse::MyPlaylists {
+            offset: 0,
+            generation: *generation,
+            result: result.map(|items| Page {
+                total: items.len() as u32,
+                limit: items.len() as u32,
+                items,
+                offset: 0,
+                next: None,
+            }),
+        },
         (ApiRequest::ArtistTopTracks { id }, SessionAnswer::ArtistTop(result)) => {
             ApiResponse::ArtistTopTracks {
                 id: id.clone(),
@@ -6282,6 +6386,64 @@ mod authorization_tests {
     use super::*;
 
     #[test]
+    fn quota_exhaustion_ends_verification_and_preserves_the_saved_grant() {
+        let (runtime, mut worker, events) = worker("quota-terminal");
+        runtime.block_on(async {
+            let lease = worker.credentials.lease(CredentialSlot::Shared);
+            let token = crate::auth::StoredToken { client_id: crate::auth::DEFAULT_WEB_CLIENT_ID.into(), access_token: "dummy-current-access".into(), refresh_token: "dummy-current-refresh".into(), ..Default::default() };
+            lease.save(StoredGrant::Web(token.clone())).await.unwrap();
+            let (commands, mut receiver) = mpsc::unbounded_channel();
+            worker.commands = commands;
+            worker.api.set_state(ApiSource::Shared, SessionState::Authorizing);
+            worker.api.verification_client(ApiSource::Shared).pause_for_quota();
+            worker.verify_web_grant(ApiSource::Shared, token);
+            let command = tokio::time::timeout(Duration::from_millis(500), receiver.recv()).await.expect("quota failures must end verification without waiting for another retry").unwrap();
+            let Command::WebVerificationFailed { source, error, .. } = command else { panic!("expected a visible verification failure"); };
+            assert!(matches!(error, ApiError::QuotaExhausted));
+            worker.on_web_verification_failed(source, error);
+            assert!(events.try_iter().any(|event| matches!(event, Event::Auth(AuthStatus::Failed(message)) if message.contains("quota"))));
+            assert!(matches!(lease.load().await.unwrap().grant, Some(StoredGrant::Web(_))));
+            assert!(lease.current());
+            assert!(receiver.try_recv().is_err(), "no automatic retry was scheduled");
+        });
+    }
+
+    #[test]
+    fn shared_quota_exhaustion_does_not_sign_out_a_ready_personal_app() {
+        let (runtime, mut worker, events) = worker("quota-other-ready");
+        let _entered = runtime.enter();
+        verify(&mut worker, ApiSource::Personal, "alice");
+        let _ = events.try_iter().collect::<Vec<_>>();
+        worker.on_web_verification_failed(ApiSource::Shared, ApiError::QuotaExhausted);
+        assert!(worker.signed_in);
+        assert!(worker.api.personal_ready());
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::Auth(AuthStatus::Failed(_))))
+        );
+    }
+
+    #[test]
+    fn explicit_quota_retry_reuses_the_grant_without_starting_a_browser_flow() {
+        let (runtime, mut worker, _) = worker("quota-retry-grant");
+        runtime.block_on(async {
+            let source = ApiSource::Personal;
+            let token = crate::auth::StoredToken { client_id: "personal".into(), access_token: "dummy-current-access".into(), ..Default::default() };
+            let lease = worker.credentials.lease(web_slot(source));
+            worker.web_tokens[web_slot(source).index()] = Some(WebTokens::new(worker.http.clone(), token.clone(), lease.clone(), source, worker.storage_notice(lease)));
+            worker.api.verification_client(source).pause_for_quota();
+            let (commands, mut receiver) = mpsc::unbounded_channel();
+            worker.commands = commands;
+            worker.retry_quota(source);
+            let command = tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await.unwrap().unwrap();
+            assert!(matches!(command, Command::WebSignedIn { source: ApiSource::Personal, token: reused, .. } if reused.access_token == token.access_token && reused.client_id == token.client_id));
+            assert!(worker.cancel_signin.is_none(), "no browser callback listener was started");
+            assert_eq!(worker.api.state(source), SessionState::Authorizing);
+        });
+    }
+
+    #[test]
     fn playlist_cache_store_does_not_hold_up_the_command_loop() {
         let (runtime, mut worker, events) = worker("playlist-cache-command-loop");
         worker
@@ -7142,9 +7304,9 @@ mod authorization_tests {
             dirs,
             config,
             Some("personal".into()),
-            http,
+            http.clone(),
             art,
-            Arc::new(NetActivity::default()),
+            Arc::new(ApiGateway::new(http, Arc::new(NetActivity::default()))),
             sender,
             commands,
             Waker::default(),
@@ -8063,6 +8225,28 @@ mod session_tests {
         assert!(same_account("alice", Some(&alice)));
         assert!(!same_account("bob", Some(&alice)));
         assert!(!same_account("alice", None), "nothing verified yet");
+    }
+
+    #[test]
+    fn the_session_library_preserves_generation_and_never_replaces_a_web_continuation() {
+        let request = ApiRequest::MyPlaylists {
+            offset: 0,
+            generation: 7,
+        };
+        assert_eq!(session_read(&request), Some(SessionRead::Library));
+        let answer = SessionAnswer::Library(Ok(vec![Playlist {
+            id: "a".into(),
+            ..Default::default()
+        }]));
+        assert!(matches!(session_response(&request, answer),
+            Some(ApiResponse::MyPlaylists { offset: 0, generation: 7, result: Ok(page) })
+                if page.items[0].id == "a" && page.total == 1 && page.next.is_none()));
+        let continuation = ApiRequest::MyPlaylists {
+            offset: 50,
+            generation: 7,
+        };
+        assert_eq!(session_read(&continuation), None);
+        assert!(session_response(&continuation, SessionAnswer::Library(Ok(Vec::new()))).is_none());
     }
 
     /// A header read, a page of rows or a sample at the request's offset,

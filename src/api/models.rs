@@ -388,7 +388,7 @@ pub fn join_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
 pub struct ResumePoint {
     #[serde(default)]
     pub fully_played: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub resume_position_ms: u32,
 }
 
@@ -403,7 +403,7 @@ pub struct Episode {
     #[serde(default)]
     #[serde(deserialize_with = "null_default")]
     pub uri: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub duration_ms: u32,
     #[serde(default)]
     #[serde(deserialize_with = "null_default")]
@@ -423,6 +423,16 @@ pub struct Episode {
 }
 
 impl Episode {
+    /// Enough metadata to identify a saved episode and offer its play control.
+    /// Missing artwork, duration, or resume data alone does not hide it.
+    pub fn has_details(&self) -> bool {
+        !self.name.trim().is_empty()
+            && self
+                .uri
+                .strip_prefix("spotify:episode:")
+                .is_some_and(|id| !id.trim().is_empty())
+    }
+
     /// Spotify's saved place in this episode when it was started and not
     /// finished, kept a moment short of the end. A finished or unstarted
     /// episode starts from the beginning.
@@ -697,6 +707,7 @@ pub struct SavedShow {
 pub struct SavedEpisode {
     #[serde(default)]
     pub added_at: Option<String>,
+    #[serde(default, deserialize_with = "null_default")]
     pub episode: Episode,
 }
 
@@ -1083,6 +1094,43 @@ mod tests {
         let artist: Artist = serde_json::from_str(json).unwrap();
         assert!(artist.images.is_empty());
         assert!(artist.genres.is_empty());
+    }
+
+    #[test]
+    fn saved_episodes_accept_unknown_duration_and_resume_position() {
+        let page: Page<SavedEpisode> = serde_json::from_str(
+            r#"{"items":[{"episode":{"id":"unknown","uri":"spotify:episode:unknown","duration_ms":null,"resume_point":{"resume_position_ms":null}}},{"episode":{"id":"known","uri":"spotify:episode:known","duration_ms":2000,"resume_point":{"resume_position_ms":500}}}],"total":2,"limit":50}"#,
+        ).unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].episode.uri, "spotify:episode:unknown");
+        assert_eq!(page.items[0].episode.duration_ms, 0);
+        assert_eq!(page.items[0].episode.resume_ms(), None);
+        assert_eq!(page.items[1].episode.duration_ms, 2000);
+        assert_eq!(page.items[1].episode.resume_ms(), Some(500));
+    }
+
+    #[test]
+    fn unavailable_saved_episodes_keep_server_slots_without_hiding_named_episodes() {
+        let page: Page<SavedEpisode> = serde_json::from_str(r#"{
+            "items":[
+                {"episode":null},
+                {"episode":{"id":null,"name":null,"uri":null,"duration_ms":null}},
+                {"episode":{"id":"named","name":"A named episode","uri":"spotify:episode:named","duration_ms":null,"images":null}},
+                {"episode":{"id":"missing-uri","name":"An unavailable episode"}},
+                {"episode":{"name":"   ","uri":"spotify:episode:blank"}}
+            ],"offset":5,"limit":5,"total":12,"next":"next-page"
+        }"#).unwrap();
+        assert_eq!(page.items.len(), 5, "retain raw slots for pagination");
+        assert_eq!(page.next_offset(), Some(10));
+        let visible: Vec<_> = page
+            .items
+            .iter()
+            .filter(|saved| saved.episode.has_details())
+            .collect();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].episode.id, "named");
+        assert_eq!(visible[0].episode.duration_ms, 0);
+        assert!(visible[0].episode.images.is_empty());
     }
 
     #[test]

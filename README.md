@@ -1,3 +1,35 @@
+# Spotifast J
+
+Connection status and reconnect controls live in the top bar. Spotify quota
+exhaustion pauses requests through the affected API identity until **Try again**
+is selected or the app is restarted.
+The connecting card grows to fit its content and keeps only a short status and
+retry controls. Detailed failures appear in popups, with identical active errors
+shown once.
+
+Playlist lists and contents prefer the playback connection, including owned
+playlists. Cached playlist rows appear while fresh reads are pending or fail;
+edits wait for Spotify to confirm their snapshot. Liked Songs, Your Episodes,
+and other unsupported session features still use the Web API. Initial sign-in
+still needs a verified Web API grant for the same account.
+
+Personal fork of [crmne/spotifast](https://github.com/crmne/spotifast).
+The repository and local project are named `my-spotifast`.
+
+The left sidebar keeps Home, Search and a local pin list. It has no library
+filters, toolbar, sorting controls or unpinned followed items. Right-click a
+playlist, album, artist or podcast and choose **Pin to top**; right-click a pin
+to unpin it. Drag pins to reorder them. Names and covers are saved locally so
+pins remain visible when Spotify rate limits library requests.
+
+Pins are separate from Spotify's pins. The fork retains Spotifast's existing
+settings and protected sign-in storage. Updates target this fork's releases,
+never the upstream app; until fork releases are published, install local builds.
+
+The upstream documentation below describes features shared with Spotifast.
+
+---
+
 <p align="center">
   <img src="docs/assets/images/logo.svg" alt="Spotifast logo" width="88" height="88">
 </p>

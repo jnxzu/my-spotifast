@@ -5,7 +5,7 @@
 //! handles capability differences before dispatch.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -53,6 +53,12 @@ impl ApiError {
 
     pub fn is_network(&self) -> bool {
         matches!(self, Self::Network(_))
+    }
+
+    /// Quota exhaustion needs an explicit retry, unlike a temporary throttle.
+    pub(crate) fn retry_verification(&self) -> bool {
+        !matches!(self, Self::QuotaExhausted | Self::SignInExpired { .. })
+            && self.status().is_none_or(|status| status >= 500)
     }
 }
 
@@ -117,6 +123,11 @@ pub struct WebTokens {
 }
 
 impl WebTokens {
+    /// Reuse the current grant when the listener explicitly retries a quota pause.
+    pub(crate) async fn snapshot(&self) -> crate::auth::StoredToken {
+        self.token.lock().await.clone()
+    }
+
     pub fn new(
         http: impl Into<Http>,
         token: crate::auth::StoredToken,
@@ -367,6 +378,7 @@ pub struct ApiClient {
     limiter: Semaphore,
     background_limiter: Semaphore,
     queue_writes: tokio::sync::Mutex<()>,
+    quota_exhausted: AtomicBool,
     cooldown_until: tokio::sync::Mutex<Instant>,
     partner_cooldown_until: tokio::sync::Mutex<Instant>,
     search_limit: u32,
@@ -392,6 +404,7 @@ impl ApiClient {
             limiter: Semaphore::new(MAX_IN_FLIGHT),
             background_limiter: Semaphore::new(MAX_BACKGROUND_IN_FLIGHT),
             queue_writes: tokio::sync::Mutex::new(()),
+            quota_exhausted: AtomicBool::new(false),
             cooldown_until: tokio::sync::Mutex::new(Instant::now()),
             partner_cooldown_until: tokio::sync::Mutex::new(Instant::now()),
             search_limit,
@@ -403,6 +416,27 @@ impl ApiClient {
 
     pub fn set_token_provider(&self, provider: Option<TokenProvider>) {
         *self.tokens.lock().unwrap_or_else(|p| p.into_inner()) = provider;
+    }
+
+    pub fn quota_exhausted(&self) -> bool {
+        self.quota_exhausted.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn pause_for_quota(&self) {
+        self.quota_exhausted.store(true, Ordering::SeqCst);
+    }
+
+    /// Only an explicit user retry clears a quota pause in this authorization.
+    pub(crate) fn retry_quota(&self) {
+        self.quota_exhausted.store(false, Ordering::SeqCst);
+    }
+
+    fn check_quota(&self) -> Result<()> {
+        if self.quota_exhausted() {
+            Err(ApiError::QuotaExhausted)
+        } else {
+            Ok(())
+        }
     }
 
     /// A throttled shared app must not occupy the personal app's background slots.
@@ -525,6 +559,7 @@ impl ApiClient {
         body: Option<&Value>,
         jpeg: Option<&str>,
     ) -> Result<String> {
+        self.check_quota()?;
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
@@ -553,7 +588,9 @@ impl ApiClient {
             // After the permit: a 429 answered while this request queued has
             // extended the cooldown, and sending now would only earn another.
             self.wait_for_cooldown().await;
+            self.check_quota()?;
             let token = provider.access_token().await?;
+            self.check_quota()?;
             let mut request = self
                 .http
                 .client()
@@ -587,6 +624,7 @@ impl ApiClient {
                     .map_or(Duration::from_secs(1), Duration::from_secs);
                 let text = response.text().await.unwrap_or_default();
                 if is_quota_exhausted(&text) {
+                    self.pause_for_quota();
                     return Err(ApiError::QuotaExhausted);
                 }
                 // A rejected queue append is safe to retry. Keep its place
@@ -1281,6 +1319,74 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn quota_exhaustion_blocks_later_requests_until_an_explicit_retry() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = client_with_token(
+            Some(format!("http://{}", listener.local_addr().unwrap())),
+            "test-only",
+        );
+        let server = tokio::spawn(async move {
+            for (status, body) in [
+                (
+                    "429 Too Many Requests",
+                    r#"{"error":{"status":429,"message":"Too many requests","reason":"QUOTA_EXCEEDED"}}"#,
+                ),
+                ("200 OK", r#"{"ok":true}"#),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                assert!(socket.read(&mut bytes).await.unwrap() > 0);
+                socket.write_all(format!("HTTP/1.1 {status}\r\nRetry-After: 999\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        assert!(matches!(
+            client.send(Method::GET, "/me", &[], None).await,
+            Err(ApiError::QuotaExhausted)
+        ));
+        for method in [Method::GET, Method::POST, Method::PUT, Method::DELETE] {
+            assert!(matches!(
+                client.send(method, "/me", &[], None).await,
+                Err(ApiError::QuotaExhausted)
+            ));
+        }
+        assert!(client.quota_exhausted());
+        client.retry_quota();
+        assert!(client.send(Method::GET, "/me", &[], None).await.is_ok());
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn requests_waiting_for_capacity_stop_when_quota_is_exhausted() {
+        let client = Arc::new(client_with_token(
+            Some("http://127.0.0.1:9".into()),
+            "test-only",
+        ));
+        let permits = client
+            .limiter
+            .acquire_many(MAX_IN_FLIGHT as u32)
+            .await
+            .unwrap();
+        let request = tokio::spawn({
+            let client = client.clone();
+            async move { client.send(Method::GET, "/me", &[], None).await }
+        });
+        tokio::task::yield_now().await;
+        client.pause_for_quota();
+        drop(permits);
+        assert!(matches!(
+            request.await.unwrap(),
+            Err(ApiError::QuotaExhausted)
+        ));
+        let replacement = client.for_authorization(client.provider().unwrap());
+        assert!(!replacement.quota_exhausted());
+        assert!(client.quota_exhausted(), "an older request stays paused");
+    }
 
     /// An unrelated Pathfinder request can finish while another reply is slow.
     #[tokio::test]

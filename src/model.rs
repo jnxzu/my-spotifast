@@ -749,6 +749,8 @@ pub struct PlaylistPage {
     pub tail_checked: bool,
     /// Whether this generation's disk cache read has finished.
     pub cache_checked: bool,
+    /// Disk rows shown before Spotify confirms their snapshot; read-only.
+    pub cache_preview: bool,
     /// The Spotify offset through which this snapshot is saved on disk.
     pub cache_saved_through: Option<u32>,
     pub cache_saved_total: Option<u32>,
@@ -1191,6 +1193,8 @@ pub enum Action {
     ToggleShowAllTop(String),
     Reload(Page),
     SignIn,
+    RetryQuota(crate::api::ApiSource),
+    ReconnectWebApi(crate::api::ApiSource),
     CancelSignIn,
     SignOut,
     /// Add, replace, or remove the optional personal Web API app.
@@ -1224,6 +1228,10 @@ pub enum Action {
     },
     SetLibraryGrid(bool),
     ToggleLibraryFolder(String),
+    ToggleLibraryPin {
+        uri: String,
+        details: crate::settings::LibraryPinDetails,
+    },
     ArrangeLibrary {
         pinned: Vec<String>,
         /// A drag outside the pin block selects this local playlist order.

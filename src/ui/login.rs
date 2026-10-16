@@ -29,25 +29,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
             fastframe_titlebar::drag(ui, drag_rect);
             let top = super::blend(palette.window, palette.accent, 0.10);
             super::widgets::paint_vertical_gradient(ui, rect, top, palette.window);
-            let card_width = 440.0;
+            let card_width = 440.0_f32.min((rect.width() - 40.0).max(0.0));
             let proxy_id = egui::Id::new("login-proxy-open");
-            let proxy_open = ui
-                .ctx()
-                .data(|data| data.get_temp::<bool>(proxy_id))
-                .unwrap_or(false);
-            let card_height: f32 = if !proxy_open {
-                400.0
-            } else if app.settings.proxy_mode.is_manual() {
-                720.0
-            } else {
-                500.0
-            };
-            let card_height = card_height.min((rect.height() - 64.0).max(0.0));
-            let card = Rect::from_center_size(
-                rect.center() - Vec2::new(0.0, 20.0),
-                Vec2::new(card_width, card_height),
-            );
-            let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(card).layout(Layout::top_down(Align::Center)));
+            // Size the card to its content. Only unusually small windows or
+            // expanded proxy settings need scrolling inside the screen bounds.
+            egui::Area::new(egui::Id::new("login-card"))
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::new(0.0, -20.0))
+                .constrain_to(rect.shrink2(Vec2::new(20.0, 48.0)))
+                .layout(Layout::top_down(Align::Center))
+                .fade_in(false)
+                .show(&ctx, |ui| {
+            // Offer the full screen height on every frame, so a previously
+            // smaller card cannot constrain the next state's content.
+            ui.set_width(card_width);
+            ui.set_max_height((rect.height() - 96.0).max(0.0));
             Frame::new()
                 .fill(palette.panel)
                 .stroke(Stroke::new(1.0, palette.outline))
@@ -59,10 +54,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     spread: 0,
                     color: palette.shadow,
                 })
-                .show(&mut card_ui, |ui| {
+                .show(ui, |ui| {
                     egui::ScrollArea::vertical()
                         .id_salt("login-card-scroll")
-                        .max_height((card.height() - 72.0).max(0.0))
+                        .max_height((rect.height() - 168.0).max(0.0))
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                     ui.set_width(card_width - 72.0);
@@ -74,6 +69,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     theme::text(ui, gettext(locale, "A native Spotify client."), theme::regular(14.5), palette.secondary);
                     ui.add_space(22.0);
                     match &app.auth {
+                        _ if !app.backend.quota_exhausted_sources().is_empty() => {
+                            theme::text(ui, gettext(locale, "Connection paused"), theme::medium(14.0), palette.text);
+                            let paused = app.backend.quota_exhausted_sources();
+                            for source in &paused {
+                                let label = if paused.len() == 1 { "Try again" } else {
+                                    match source {
+                                        crate::api::ApiSource::Shared => "Retry shared access",
+                                        crate::api::ApiSource::Personal => "Retry personal app",
+                                    }
+                                };
+                                if big_button(ui, app, &gettext(locale, label)) {
+                                    app.actions.push(Action::RetryQuota(*source));
+                                }
+                            }
+                        }
                         AuthStatus::WaitingForBrowser { url } => {
                             let url = url.clone();
                             ui.horizontal(|ui| {
@@ -97,11 +107,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                                 theme::text(ui, gettext(locale, "Connecting to Spotify…"), theme::medium(14.0), palette.text);
                             });
                         }
-                        AuthStatus::Failed(message) => {
-                            let message = message.clone();
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(message).font(theme::regular(13.0)).color(palette.danger)).wrap(),
-                            );
+                        AuthStatus::Failed(_) => {
+                            theme::text(ui, gettext(locale, "Couldn't connect to Spotify"), theme::medium(14.0), palette.text);
                             ui.add_space(12.0);
                             if big_button(ui, app, &gettext(locale, "Try again")) {
                                 app.actions.push(Action::SignIn);
@@ -181,6 +188,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     ui.data_mut(|data| data.insert_temp(proxy_id, proxy_open));
                         });
                 });
+                });
             ui.painter().text(
                 pos2(rect.center().x, rect.bottom() - 24.0),
                 egui::Align2::CENTER_BOTTOM,
@@ -191,6 +199,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                 palette.dim,
             );
         });
+}
+
+/// Detailed quota status inside the top-bar connection popup.
+pub(super) fn quota_notice(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    for source in app.backend.quota_exhausted_sources() {
+        let title = match source {
+            crate::api::ApiSource::Shared => "Spotify quota exceeded (shared app)",
+            crate::api::ApiSource::Personal => "Spotify quota exceeded (personal app)",
+        };
+        ui.push_id(title, |ui| {
+        egui::Frame::new().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+            ui.add(egui::Label::new(egui::RichText::new(gettext(app.locale, title)).font(theme::medium(14.0)).color(palette.danger)).wrap());
+            ui.add(egui::Label::new(gettext(app.locale, "Automatic requests are paused for this app. Spotify has not provided a reset time. Choose Try again to retry manually.")).wrap());
+            if theme::pill_button(ui, &palette, &gettext(app.locale, "Try again"), false).clicked() {
+                app.actions.push(Action::RetryQuota(source));
+            }
+        });
+        });
+    }
 }
 
 fn proxy_fields(ui: &mut egui::Ui, app: &mut App) {
@@ -292,6 +320,206 @@ mod tests {
     use crate::{app::AppOptions, backend::Waker, paths::AppDirs, settings::Settings};
 
     #[test]
+    fn quota_pause_replaces_the_spinner_and_offers_only_an_explicit_retry() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        theme::install(&ctx);
+        let root =
+            std::env::temp_dir().join(format!("spotifast-login-quota-{}", std::process::id()));
+        let mut app = App::new(
+            &Waker::default(),
+            AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                restore_sign_in: false,
+                tray: false,
+            },
+        );
+        app.auth = AuthStatus::Connecting;
+        app.backend.pause_for_quota(crate::api::ApiSource::Shared);
+        let draw = |app: &mut App, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(760.0, 620.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(app, ui, true),
+            );
+            output.textures_delta.clear();
+            output.platform_output.accesskit_update.unwrap()
+        };
+        draw(&mut app, vec![]);
+        let tree = draw(&mut app, vec![]);
+        assert!(
+            tree.nodes
+                .iter()
+                .any(|(_, node)| node.value() == Some("Connection paused"))
+        );
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.value() == Some("Connecting to Spotify…"))
+        );
+        let bounds = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| {
+                node.label() == Some("Try again") && node.role() == egui::accesskit::Role::Button
+            })
+            .unwrap()
+            .1
+            .bounds()
+            .unwrap();
+        assert!(bounds.y0 >= 0.0 && bounds.y1 <= 620.0);
+        let pos = pos2(
+            (bounds.x0 + bounds.x1) as f32 / 2.0,
+            (bounds.y0 + bounds.y1) as f32 / 2.0,
+        );
+        draw(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(matches!(
+            app.actions.as_slice(),
+            [Action::RetryQuota(crate::api::ApiSource::Shared)]
+        ));
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn connecting_and_failure_cards_fit_their_content_without_scrolling() {
+        for dark in [false, true] {
+            for height in [520.0, 620.0, 900.0] {
+                let ctx = egui::Context::default();
+                ctx.enable_accesskit();
+                theme::install(&ctx);
+                ctx.set_theme(if dark {
+                    egui::ThemePreference::Dark
+                } else {
+                    egui::ThemePreference::Light
+                });
+                let root = std::env::temp_dir().join(format!(
+                    "spotifast-login-fit-{dark}-{height}-{}",
+                    std::process::id()
+                ));
+                let mut app = App::new(
+                    &Waker::default(),
+                    AppDirs {
+                        config: root.join("config"),
+                        state: root.join("state"),
+                        cache: root.join("cache"),
+                    },
+                    Settings::default(),
+                    AppOptions {
+                        media_controls: false,
+                        restore_sign_in: false,
+                        tray: false,
+                    },
+                );
+                app.settings.web_client_id = Some("personal".into());
+                let draw = |app: &mut App, events| {
+                    let connecting = matches!(app.auth, AuthStatus::Connecting);
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(760.0, height),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| show(app, ui, connecting),
+                    );
+                    output.textures_delta.clear();
+                    output.platform_output.accesskit_update.unwrap()
+                };
+                let mut heights = Vec::new();
+                for auth in [
+                    AuthStatus::Connecting,
+                    AuthStatus::Failed("failure details ".repeat(200)),
+                ] {
+                    app.auth = auth;
+                    for _ in 0..10 {
+                        draw(&mut app, vec![]);
+                    }
+                    let tree = draw(&mut app, vec![]);
+                    assert!(!tree.nodes.iter().any(|(_, node)| {
+                        node.value()
+                            .is_some_and(|text| text.contains("failure details"))
+                    }));
+                    let card = ctx
+                        .memory(|memory| memory.area_rect(egui::Id::new("login-card")))
+                        .unwrap();
+                    assert!(card.top() >= 0.0 && card.bottom() < height - 40.0);
+                    assert!(
+                        card.height() <= height - 96.0 + 1.0,
+                        "card={card:?}, height={height}"
+                    );
+                    heights.push(card.height());
+                    let proxy_top = |tree: &egui::accesskit::TreeUpdate| {
+                        tree.nodes
+                            .iter()
+                            .find(|(_, node)| node.label() == Some("Proxy Settings"))
+                            .and_then(|(_, node)| node.bounds())
+                            .unwrap()
+                            .y0
+                    };
+                    let before = proxy_top(&tree);
+                    draw(
+                        &mut app,
+                        vec![
+                            egui::Event::PointerMoved(card.center()),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(0.0, -1000.0),
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                    for _ in 0..10 {
+                        draw(&mut app, vec![]);
+                    }
+                    let after = proxy_top(&draw(&mut app, vec![]));
+                    assert!(
+                        (after - before).abs() < 1.0,
+                        "the normal connecting card must not scroll: dark={dark}, height={height}, before={before}, after={after}"
+                    );
+                }
+                assert!(
+                    heights[1] > heights[0],
+                    "the card grows when retry controls appear"
+                );
+                app.backend.shutdown();
+            }
+        }
+    }
+
+    #[test]
     fn expanded_proxy_settings_remain_reachable_in_a_short_window() {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
@@ -345,6 +573,7 @@ mod tests {
                 .unwrap();
             bounds.y0 >= 0.0 && bounds.y1 <= 480.0
         };
+        frame(vec![]); // Let the content-sized area settle its initial bounds.
         let first = frame(vec![]);
         assert!(visible_button(&first, "Sign in with Spotify"));
         let center = |label: &str| {

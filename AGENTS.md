@@ -1,4 +1,12 @@
-# Spotifast agent guide
+# Spotifast J agent guide
+
+This personal fork is `jnxzu/my-spotifast`, locally `D:/Work/code/my-spotifast`.
+The app is named Spotifast J; the executable and existing data paths stay
+`spotifast` to preserve sign-in and settings. The sidebar is intentionally pins
+only. Do not restore upstream library controls or unpinned items.
+Dev Home displays `my-spotifast`; its preserved internal tracker ID is
+`spotifast`, so use that ID with the Dev Home CLI.
+
 
 Follow `CONTRIBUTING.md`; it is the canonical product and contribution policy.
 These instructions add implementation constraints for coding agents.

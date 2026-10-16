@@ -324,7 +324,24 @@ including Homebrew, Flatpak, apt, dnf, pacman, Nix, and Cargo. Other
 installations, the AppImage among them, use the [Download page](/download/).
 Portable archives identify themselves with `spotifast-portable.txt`.
 
-## Library order
+## Spotifast J sidebar
+
+This fork shows Home, Search and local pins only. The library toolbar, filters,
+search and sort controls are hidden, and unpinned followed items stay off the
+sidebar. Use an item's right-click menu anywhere in the app to pin or unpin it;
+drag the pins to arrange them. Pin labels and covers survive library failures
+and restarts. Spotify's own pins are not synchronized. Existing library sort
+preferences remain readable but do not filter or reorder this pin list.
+
+**Your Episodes** uses Spotify's green bookmark cover and opens saved podcast
+episodes. Missing duration or resume-position data does not prevent the list
+from opening. Empty entries without a title or usable episode link stay
+hidden; missing artwork or duration alone does not hide a named episode. This
+does not remove anything from Spotify's library. If a request fails, its error
+stays visible until you choose
+**Retry**, rather than repeatedly requesting the same page.
+
+## Upstream library order (not used by the fork's sidebar)
 
 Select **By You** under Playlists to show only playlists owned by your signed-in
 account, alongside Liked Songs. Followed playlists and collaborative playlists

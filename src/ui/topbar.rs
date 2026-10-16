@@ -5,7 +5,9 @@ use std::sync::Arc;
 use egui::{Align, CornerRadius, Galley, Layout, Sense, Vec2, pos2, vec2};
 
 use crate::api::models::pick_image;
+use crate::api::{ApiSource, SessionState};
 use crate::app::App;
+use crate::backend::LocalPlayback;
 use crate::i18n::gettext;
 use crate::model::{Action, BackgroundActivity, Page};
 use crate::theme::{self, Icon, Palette};
@@ -67,7 +69,7 @@ fn least_width_after(lead: f32) -> f32 {
         + RIGHT_CONTROLS_WIDTH
         + SPINNER_SIZE
         + ITEM_SPACING
-        + 2.0 * (ITEM_SPACING + BADGE_CHIP)
+        + 3.0 * (ITEM_SPACING + BADGE_CHIP)
 }
 
 /// How the top bar divides itself for one window width.
@@ -317,18 +319,27 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
             // Ask once, so the bar reserves room for exactly the spinner it
             // then draws.
+            let connection_label = connection_label(app);
+            let mut connection_palette = palette;
+            if matches!(
+                connection_label,
+                "Quota exceeded" | "Connection issue" | "Offline"
+            ) {
+                connection_palette.accent = palette.danger;
+            }
+            let connection_galley = ui.painter().layout_no_wrap(
+                gettext(locale, connection_label).into_owned(),
+                theme::medium(12.5),
+                connection_palette.accent,
+            );
             let activity = app.background_activity();
             let busy = activity.is_some();
             let badges = |labels: bool| {
                 badge_width(device_galley.as_ref(), DEVICE_BADGE_PADDING, labels)
                     + badge_width(update_galley.as_ref(), UPDATE_BADGE_PADDING, labels)
+                    + badge_width(Some(&connection_galley), UPDATE_BADGE_PADDING, labels)
             };
             let controls = RIGHT_CONTROLS_WIDTH
-                + if !app.network_reachable {
-                    ICON_BUTTON_SIZE + 4.0
-                } else {
-                    0.0
-                }
                 + if busy {
                     SPINNER_SIZE + ITEM_SPACING
                 } else {
@@ -491,36 +502,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             app.actions.push(Action::SignOut);
                         }
                     });
-                if !app.network_reachable {
-                    ui.add_space(4.0);
-                    let (rect, response) =
-                        ui.allocate_exact_size(Vec2::splat(ICON_BUTTON_SIZE), Sense::hover());
-                    if ui.is_rect_visible(rect) {
-                        let fill = if response.hovered() {
-                            if palette.dark {
-                                egui::Color32::from_rgb(38, 110, 205)
-                            } else {
-                                egui::Color32::from_rgb(66, 133, 244)
-                            }
-                        } else if palette.dark {
-                            egui::Color32::from_rgb(28, 92, 178)
-                        } else {
-                            egui::Color32::from_rgb(41, 121, 255)
-                        };
-                        ui.painter().circle_filled(rect.center(), 14.5, fill);
-                        theme::paint_icon(
-                            ui,
-                            Icon::WifiOff,
-                            rect,
-                            ICON_BUTTON_ICON,
-                            egui::Color32::WHITE,
-                        );
-                    }
-                    response.on_hover_text(gettext(
-                        locale,
-                        "Spotifast is offline. Reconnecting automatically when connection returns.",
-                    ));
-                }
                 ui.add_space(4.0);
                 if theme::icon_button(
                     ui,
@@ -580,6 +561,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     theme::spinner(ui, SPINNER_SIZE, palette.secondary)
                         .on_hover_text(hint.as_ref());
                 }
+                let connection_response = badge(
+                    ui,
+                    &connection_palette,
+                    if app.network_reachable {
+                        Icon::Info
+                    } else {
+                        Icon::WifiOff
+                    },
+                    connection_galley,
+                    UPDATE_BADGE_PADDING,
+                    fit.labels,
+                )
+                .on_hover_text(gettext(locale, "Connection status"));
+                egui::Popup::menu(&connection_response)
+                    .frame(super::widgets::menu_frame(&palette))
+                    .align(egui::RectAlign::BOTTOM_END)
+                    .show(|ui| connection_details(app, ui));
                 // Where playback is.
                 if let Some(galley) = device_galley {
                     let device = galley.text().to_owned();
@@ -625,6 +623,91 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
         },
     );
+}
+
+fn connection_label(app: &App) -> &'static str {
+    if !app.network_reachable {
+        "Offline"
+    } else if !app.backend.quota_exhausted_sources().is_empty() {
+        "Quota exceeded"
+    } else if matches!(app.local_playback, LocalPlayback::Failed(_)) {
+        "Connection issue"
+    } else if matches!(
+        app.local_playback,
+        LocalPlayback::Connecting | LocalPlayback::Authorizing | LocalPlayback::WaitingForNetwork
+    ) || [ApiSource::Shared, ApiSource::Personal]
+        .into_iter()
+        .any(|source| {
+            matches!(
+                app.backend.connection_state(source),
+                SessionState::Authorizing
+            )
+        })
+    {
+        "Connecting"
+    } else if !matches!(
+        app.backend.connection_state(ApiSource::Shared),
+        SessionState::Ready { .. }
+    ) || app.settings.web_client_id.is_some()
+        && !matches!(
+            app.backend.connection_state(ApiSource::Personal),
+            SessionState::Ready { .. }
+        )
+    {
+        "Connection issue"
+    } else {
+        "Connected"
+    }
+}
+
+fn connection_details(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let locale = app.locale;
+    ui.set_width(320.0);
+    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+        theme::text(ui, gettext(locale, "Connection status"), theme::semibold(14.0), palette.text);
+        if !app.network_reachable {
+            ui.label(gettext(locale, "Offline. Reconnecting automatically when your connection returns."));
+        }
+        let playback = match &app.local_playback {
+            LocalPlayback::Ready { .. } => "Playback connection: connected",
+            LocalPlayback::Connecting => "Playback connection: connecting",
+            LocalPlayback::Authorizing => "Playback connection: waiting for sign-in",
+            LocalPlayback::WaitingForNetwork => "Playback connection: waiting for network",
+            LocalPlayback::Unavailable | LocalPlayback::Failed(_) => "Playback connection: unavailable",
+        };
+        ui.label(gettext(locale, playback));
+        if let LocalPlayback::Failed(error) = &app.local_playback {
+            ui.add(egui::Label::new(error).wrap());
+        }
+        if matches!(app.local_playback, LocalPlayback::Unavailable | LocalPlayback::Failed(_))
+            && ui.add_enabled(app.network_reachable,
+                egui::Button::new(gettext(locale, "Reconnect playback"))).clicked() {
+            app.actions.push(Action::EnablePlayback);
+        }
+        let paused = app.backend.quota_exhausted_sources();
+        for (source, label) in [(ApiSource::Shared, "Shared access"), (ApiSource::Personal, "Personal app")] {
+            if paused.contains(&source) { continue; }
+            ui.push_id(label, |ui| {
+                let state = app.backend.connection_state(source);
+                let configured = source == ApiSource::Shared || app.settings.web_client_id.is_some();
+                let status = if !configured { "Not configured" } else { match state {
+                    SessionState::Ready { .. } => "Connected",
+                    SessionState::Authorizing => "Connecting",
+                    SessionState::Unavailable => "Disconnected",
+                }};
+                ui.label(format!("{}: {}", gettext(locale, label), gettext(locale, status)));
+                if configured && matches!(state, SessionState::Unavailable)
+                    && ui.add_enabled(app.network_reachable,
+                        egui::Button::new(gettext(locale, "Reconnect"))).clicked() {
+                    app.actions.push(Action::ReconnectWebApi(source));
+                }
+            });
+        }
+        super::login::quota_notice(app, ui);
+        ui.add(egui::Label::new(gettext(locale,
+            "Playlists prefer the playback connection. Cached playlists remain visible while reconnecting.")).wrap());
+    });
 }
 
 fn capitalize(text: &str) -> String {
@@ -675,6 +758,7 @@ mod topbar_fit_tests {
                 (DEVICE, CHIP),
                 (UPDATE, CHIP),
                 (DEVICE + UPDATE, CHIP * 2.0),
+                (DEVICE + UPDATE + 160.0, CHIP * 3.0),
             ] {
                 let over = right_end(room, labelled, icons);
                 assert!(
@@ -710,10 +794,10 @@ mod topbar_fit_tests {
         let lead = LEAD_GUESS;
         let room = least_width_after(lead) - lead;
         let controls = RIGHT_CONTROLS_WIDTH + SPINNER_SIZE + ITEM_SPACING;
-        let fit = topbar_fit(room, controls, DEVICE + UPDATE, CHIP * 2.0);
+        let fit = topbar_fit(room, controls, DEVICE + UPDATE + 160.0, CHIP * 3.0);
         assert!(!fit.labels);
         assert_eq!(fit.search, SEARCH_MIN);
-        assert!(controls + CHIP * 2.0 + fit.search <= room);
+        assert!(controls + CHIP * 3.0 + fit.search <= room);
     }
 
     #[test]

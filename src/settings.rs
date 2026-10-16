@@ -220,6 +220,15 @@ fn proxy_mode_is_system(mode: &ProxyMode) -> bool {
     *mode == ProxyMode::System
 }
 
+/// Non-secret labels and covers keep local pins usable while Spotify is unavailable.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryPinDetails {
+    pub name: String,
+    pub image: Option<String>,
+    pub subtitle: String,
+}
+
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -309,6 +318,8 @@ pub struct Settings {
     pub download_updates_automatically: bool,
     /// Context URIs and the local Liked Songs key, in pin order.
     pub pinned_contexts: Vec<String>,
+    /// Display metadata for this fork's local pins, independent of Spotify's pins.
+    pub library_pin_details: std::collections::BTreeMap<String, LibraryPinDetails>,
     /// Older settings keep Liked Songs first until it is moved or unpinned.
     pub liked_songs_pinned: bool,
     /// The sidebar's own playlist order, set by dragging rows. Kept while
@@ -464,6 +475,7 @@ impl Default for Settings {
             check_for_updates: true,
             download_updates_automatically: false,
             pinned_contexts: Vec::new(),
+            library_pin_details: std::collections::BTreeMap::new(),
             liked_songs_pinned: true,
             sidebar_order: Vec::new(),
             library_sort: std::collections::BTreeMap::new(),

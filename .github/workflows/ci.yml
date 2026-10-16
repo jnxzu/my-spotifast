@@ -164,6 +164,15 @@ jobs:
           $headers = & dumpbin /headers target\debug\spotifast.exe | Out-String
           if ($headers -notmatch $machine) { throw "spotifast.exe is not built for $env:RUNNER_ARCH`:`n$headers" }
 
+      - name: Windows app artifact
+        if: runner.os == 'Windows' && runner.arch == 'X64'
+        uses: actions/upload-artifact@v6
+        with:
+          name: spotifast-j-windows-x64
+          path: target/debug/spotifast.exe
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Windows installer syntax and renamed inputs
         if: runner.os == 'Windows'
         shell: pwsh

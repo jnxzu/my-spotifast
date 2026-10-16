@@ -288,7 +288,7 @@ fn desktop_entry() -> String {
 
 #[cfg(target_os = "linux")]
 const PULSEAUDIO_PROPERTIES: [(&str, &str); 2] = [
-    ("PULSE_PROP_application.name", "Spotifast"),
+    ("PULSE_PROP_application.name", "Spotifast J"),
     ("PULSE_PROP_stream.description", "Spotify playback"),
 ];
 
@@ -609,7 +609,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         #[cfg(target_os = "linux")]
         let hide_from_taskbar = options.viewport.taskbar == Some(false);
         eframe::run_native(
-            "Spotifast",
+            "Spotifast J",
             options,
             Box::new(move |cc| {
                 if let Some(gl) = &cc.gl {
@@ -821,7 +821,7 @@ fn native_options(
         app_icon()
     };
     let viewport = egui::ViewportBuilder::default()
-        .with_title("Spotifast")
+        .with_title("Spotifast J")
         .with_app_id(app_id)
         .with_taskbar(true)
         .with_icon(icon);

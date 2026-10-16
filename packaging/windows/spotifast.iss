@@ -1,4 +1,4 @@
-﻿; The Windows installer, built with Inno Setup 6.3 or later from a release
+; The Windows installer, built with Inno Setup 6.3 or later from a release
 ; binary (the release workflow does this on every tag):
 ;
 ;   iscc /DVersion=0.9.1 /DArch=x86_64 /DBinary=...\spotifast.exe ^
@@ -27,21 +27,21 @@
   #define InnoArch "x64compatible"
 #endif
 
-#define AppName "Spotifast"
+#define AppName "Spotifast J"
 #define AppExeName "spotifast.exe"
-#define AppIdentity "Spotifast"
+#define AppIdentity "SpotifastJ"
 
 [Setup]
 ; Never change: this is how Windows tells an update from a new program.
-AppId={{FCED1EA0-EBF5-4C32-BA3B-A3AD724BACC3}
+AppId={{4B55CF0D-64DF-48E6-9204-80390FD39182}
 AppName={#AppName}
 AppVersion={#Version}
 AppVerName={#AppName} {#Version}
-AppPublisher=Carmine Paolino
+AppPublisher=Jnxzu (Spotifast fork)
 AppCopyright=© 2026 Carmine Paolino
-AppPublisherURL=https://spotifast.rocks
-AppSupportURL=https://github.com/crmne/spotifast/issues
-AppUpdatesURL=https://spotifast.rocks/download/
+AppPublisherURL=https://github.com/jnxzu/my-spotifast
+AppSupportURL=https://github.com/jnxzu/my-spotifast/issues
+AppUpdatesURL=https://github.com/jnxzu/my-spotifast/releases
 DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -91,13 +91,13 @@ Root: HKCU; Subkey: "Software\Classes\spotify"; ValueType: string; ValueName: ""
 Root: HKCU; Subkey: "Software\Classes\spotify"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\spotify\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"",0"
 Root: HKCU; Subkey: "Software\Classes\spotify\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
-Root: HKCU; Subkey: "Software\Classes\Spotifast.spotify"; ValueType: string; ValueName: ""; ValueData: "URL:Spotify link"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Spotifast.spotify"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
-Root: HKCU; Subkey: "Software\Classes\Spotifast.spotify\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"",0"
-Root: HKCU; Subkey: "Software\Classes\Spotifast.spotify\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\SpotifastJ.spotify"; ValueType: string; ValueName: ""; ValueData: "URL:Spotify link"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\SpotifastJ.spotify"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\SpotifastJ.spotify\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"",0"
+Root: HKCU; Subkey: "Software\Classes\SpotifastJ.spotify\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
 Root: HKCU; Subkey: "Software\{#AppIdentity}\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\{#AppIdentity}\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "A native Spotify client"
-Root: HKCU; Subkey: "Software\{#AppIdentity}\Capabilities\URLAssociations"; ValueType: string; ValueName: "spotify"; ValueData: "Spotifast.spotify"
+Root: HKCU; Subkey: "Software\{#AppIdentity}\Capabilities\URLAssociations"; ValueType: string; ValueName: "spotify"; ValueData: "SpotifastJ.spotify"
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "{#AppIdentity}"; ValueData: "Software\{#AppIdentity}\Capabilities"; Flags: uninsdeletevalue
 
 [Run]

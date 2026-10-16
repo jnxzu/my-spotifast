@@ -12,9 +12,9 @@ local playback:
 1. **The shared Web API app** keeps full catalogue and playlist coverage.
 2. **Your optional personal Web API app** handles supported playback, library,
    catalog, catalogue search, playlist creation, and owned or collaborative
-   playlist requests without using the shared app's quota. Complete
-   playlist-library views and the playlist half of a search stay on the shared
-   app so Spotify-owned results are not filtered out. Home's **Made for you**
+   playlist writes without using the shared app's quota. Playlist-library
+   views prefer the playback session, with the shared app as fallback. The
+   playlist half of search stays on the shared app for full coverage. Home's **Made for you**
    shelf first reads the account's actual personalized section over the
    playback session. Only if that read fails does it try four shared-app
    playlist searches as an approximate fallback. Both Web API grants must
@@ -22,9 +22,11 @@ local playback:
 3. **Local playback** uses
    [librespot](https://github.com/librespot-org/librespot). It needs one more
    browser approval and keeps an independent reusable credential. Spotify Premium
-   is required. While it is signed in, its session also reads the playlists
-   the shared app would otherwise be asked for: other people's, and the
-   account's own when there is no personal app. The personalized Made for you
+   is required. While it is signed in, its session reads the account's playlist
+   library from the rootlist and reads all playlist headers and songs, including
+   owned playlists when a personal app is configured. Transient failures retain
+   the existing Web API fallback. A library continuation already started through
+   the Web API stays on that source to preserve pagination order. The personalized Made for you
    shelf needs this active session and a verified Web API grant, preferably
    personal. Spotify's private Home request receives the Web API access token as
    its `sp_t` context and the session's Login5 bearer and client token as
@@ -53,9 +55,26 @@ app's verification is still waiting. That verification keeps retrying in the
 background through rate limits without showing the top bar's "Waiting for
 Spotify" spinner, since nothing on screen waits for it.
 
+In Spotifast J, Spotify's `QUOTA_EXCEEDED` response pauses Web API requests
+through the affected app identity. Sign-in verification stops retrying and the
+top bar shows **Quota exceeded**. Its connection popup identifies the affected
+shared or personal app and contains the retry action, away from library content. An already working grant remains usable. **Try again** makes
+an explicit retry using the existing grant, without another browser approval.
+The pause lasts until that action or an app restart; the interface does not
+promise a reset time. Requests already in flight can still finish.
+
+The top-bar connection popup also shows playback and both Web API grants.
+Reconnect reuses a stored grant where available; a missing grant opens sign-in.
+Cached playlist rows can be shown before a fresh header arrives. They cannot
+supply playlist positions, permit edits, extend pagination, or be written back
+to disk until Spotify confirms their snapshot and count. A fresh first page
+replaces an unconfirmed cached prefix.
+
 Web API sign-in opens the browser only after its local callback port is available. If
-port 8989 is occupied, the sign-in screen keeps the error visible. Close the
-app using that port, then choose **Try again**. Since 0.13.2, playback setup
+port 8989 is occupied, an error popup explains the failure. The sign-in card
+keeps a short status and **Try again**, growing to fit the controls. Identical
+active error notifications are shown once. Close the app using that port,
+then choose **Try again**. Since 0.13.2, playback setup
 does the same with its port, 8898: if another app holds it, Settings shows the
 error, the browser stays closed, and a saved playback approval is kept.
 

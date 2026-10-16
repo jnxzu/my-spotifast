@@ -1489,7 +1489,41 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
         app.known_playlist(id).cloned()
     });
     let user_id = app.user_id().unwrap_or("").to_string();
-    match &page.playlist {
+    // The library supplies a header while cached rows wait for a fresh read.
+    // Keep this preview out of page state so it cannot validate disk snapshots.
+    let shown_header = page
+        .playlist
+        .get()
+        .cloned()
+        .or_else(|| {
+            page.items.loaded_once.then(|| {
+                preview.as_deref().cloned().unwrap_or_else(|| {
+                    let uri = format!("spotify:playlist:{id}");
+                    let pin = app.settings.library_pin_details.get(&uri);
+                    Playlist {
+                        id: id.to_string(),
+                        uri,
+                        name: pin.map_or_else(
+                            || gettext(app.locale, "Playlist").into_owned(),
+                            |pin| pin.name.clone(),
+                        ),
+                        images: pin
+                            .and_then(|pin| pin.image.as_ref())
+                            .map(|url| Image {
+                                url: url.clone(),
+                                ..Default::default()
+                            })
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    }
+                })
+            })
+        })
+        .map(Loadable::Loaded)
+        .unwrap_or_else(|| page.playlist.clone());
+    let unconfirmed = page.cache_preview || page.playlist.get().is_none();
+    match &shown_header {
         Loadable::Loaded(playlist) => {
             let (items, positions, duration_ms) = playlist_cached_table_items(
                 app,
@@ -1499,19 +1533,6 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 playlist.owner.id.as_deref(),
                 playlist.owner_name(),
             );
-            if items.is_empty() && !app.network_reachable {
-                widgets::empty_state(
-                    ui,
-                    &app.palette,
-                    Icon::WifiOff,
-                    &gettext(app.locale, "You're offline"),
-                    &gettext(
-                        app.locale,
-                        "Spotifast will reconnect automatically when your connection returns.",
-                    ),
-                );
-                return;
-            }
             let count = page
                 .items
                 .total
@@ -1568,14 +1589,29 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 sort,
                 page.items.revision,
             );
-            let view_play = table_view.view_uris.as_ref().map(Arc::clone);
+            let cached_uris = unconfirmed.then(|| {
+                Arc::<[String]>::from(
+                    items
+                        .iter()
+                        .map(|(item, _, _)| item.uri().to_string())
+                        .collect::<Vec<_>>(),
+                )
+            });
+            let view_play = cached_uris
+                .as_ref()
+                .map(Arc::clone)
+                .or_else(|| table_view.view_uris.as_ref().map(Arc::clone));
             let reload_action = if app.network_reachable {
                 Some((Page::Playlist(id.to_string()), page.items.loading))
             } else {
                 None
             };
-            let actions =
+            let mut actions =
                 playlist_actions(app.locale, playlist, owned, saved, view_play, reload_action);
+            if unconfirmed {
+                actions.owned_playlist = None;
+                actions.saved = None;
+            }
             if !app.network_reachable {
                 disabled_actions_row(app, ui, actions, Some(&mut page.filter));
             } else {
@@ -1585,23 +1621,31 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 app.actions
                     .push(Action::LoadMore(Page::Playlist(id.to_string())));
             }
-            let editable = app
-                .can_edit_playlist(playlist)
+            let editable = (!unconfirmed && app.can_edit_playlist(playlist))
                 .then(|| (playlist.id.clone(), playlist.snapshot_id.clone()));
+            if let Loadable::Failed(error) = &page.playlist
+                && app.network_reachable
+            {
+                widgets::error_row(ui, app, error, Some(Page::Playlist(id.to_string())));
+            }
             table(
                 app,
                 ui,
                 Table {
                     items: &items,
                     row_offset: page.items.base_offset,
-                    pagination: Some(TablePagination {
+                    pagination: (!unconfirmed).then_some(TablePagination {
                         total: page.items.total.unwrap_or(count),
                         loaded_count: page.items.items.len(),
                         positions: Some(&positions),
                     }),
-                    context: RowContext::Context {
-                        uri: playlist.uri.clone(),
-                        editable_playlist: editable,
+                    context: if let Some(uris) = cached_uris {
+                        RowContext::Uris(uris)
+                    } else {
+                        RowContext::Context {
+                            uri: playlist.uri.clone(),
+                            editable_playlist: editable,
+                        }
                     },
                     show_album: true,
                     show_cover: true,
@@ -1616,7 +1660,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     page: Page::Playlist(id.to_string()),
                     loading: page.items.loading,
                     error: page.items.error.as_deref(),
-                    can_load_more: page.items.can_load_more(),
+                    can_load_more: !unconfirmed && page.items.can_load_more(),
                     filter: &page.filter,
                     items_revision: page.items.revision,
                 },
@@ -1629,21 +1673,11 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
             } else {
                 ui.add_space(40.0);
             }
-            if !app.network_reachable {
-                widgets::empty_state(
-                    ui,
-                    &app.palette,
-                    Icon::WifiOff,
-                    &gettext(app.locale, "You're offline"),
-                    &gettext(
-                        app.locale,
-                        "Spotifast will reconnect automatically when your connection returns.",
-                    ),
-                );
-            } else {
+            if app.network_reachable && app.backend.quota_exhausted_sources().is_empty() {
                 widgets::loading_row(ui, &app.palette, app.locale);
             }
         }
+
         Loadable::Failed(error) => {
             let error = error.clone();
             if let Some(playlist) = &preview {
@@ -1652,21 +1686,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
             } else {
                 ui.add_space(40.0);
             }
-            if !app.network_reachable
-                || error.contains("network error")
-                || error.contains("Network connection error")
-            {
-                widgets::empty_state(
-                    ui,
-                    &app.palette,
-                    Icon::WifiOff,
-                    &gettext(app.locale, "You're offline"),
-                    &gettext(
-                        app.locale,
-                        "Spotifast will reconnect automatically when your connection returns.",
-                    ),
-                );
-            } else {
+            if app.network_reachable {
                 widgets::error_row(ui, app, &error, Some(Page::Playlist(id.to_string())));
             }
         }

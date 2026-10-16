@@ -29,7 +29,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
             gettext(locale, "Followed podcasts appear here."),
         ),
         _ => (
-            gettext(locale, "Episodes"),
+            gettext(locale, "Your Episodes"),
             gettext(locale, "No saved episodes"),
             gettext(locale, "Saved episodes appear here."),
         ),
@@ -204,6 +204,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
                 .episodes
                 .items
                 .iter()
+                .filter(|saved| saved.episode.has_details())
                 .map(|saved| saved.episode.clone())
                 .collect();
             widgets::virtual_rows(
@@ -215,6 +216,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, page: Page) {
                 },
             );
             let list = &app.library.episodes;
+            if episodes.is_empty()
+                && !list.items.is_empty()
+                && list.is_complete()
+                && !list.loading
+                && list.error.is_none()
+            {
+                widgets::empty_state(
+                    ui,
+                    &palette,
+                    Icon::Bookmark,
+                    &gettext(locale, "Saved episodes unavailable"),
+                    &gettext(
+                        locale,
+                        "Spotify returned no usable details for these saved episodes.",
+                    ),
+                );
+            }
             let (loading, error, can_load, empty) = (
                 list.loading,
                 list.error.clone(),
@@ -252,27 +270,19 @@ fn footer(
 ) {
     let palette = app.palette;
     if !app.network_reachable && empty {
-        widgets::empty_state(
-            ui,
-            &palette,
-            Icon::WifiOff,
-            &gettext(app.locale, "You're offline"),
-            &gettext(
-                app.locale,
-                "Spotifast will reconnect automatically when your connection returns.",
-            ),
-        );
+        // Connection state lives in the top bar, with any reconnect action.
         return;
     }
     if loading {
         ui.add_space(8.0);
         widgets::loading_row(ui, &palette, app.locale);
     }
+    let failed = error.is_some();
     if let Some(error) = error {
         widgets::error_row(ui, app, &error, Some(page.clone()));
     }
-    if empty && !loading {
+    if empty && !loading && !failed {
         widgets::empty_state(ui, &palette, icon, empty_title, empty_body);
     }
-    widgets::load_more_when_near_end(ui, app, page, can_load && !loading);
+    widgets::load_more_when_near_end(ui, app, page, can_load && !loading && !failed);
 }

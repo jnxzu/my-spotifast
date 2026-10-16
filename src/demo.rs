@@ -621,6 +621,12 @@ pub fn populate(app: &mut App) {
             app.track_cache.insert(id.clone(), track.clone());
         }
     }
+    app.settings.pinned_contexts = app
+        .library
+        .playlists
+        .get()
+        .map(|items| items.iter().map(|item| item.uri.clone()).collect())
+        .unwrap_or_default();
 }
 
 #[cfg(feature = "demo")]
@@ -1145,6 +1151,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>, show: Option<&str>) {
                     RootlistEntry::Playlist(uri(4)),
                     RootlistEntry::Playlist(uri(5)),
                 ];
+                app.settings.pinned_contexts = vec![
+                    "spotify:folder:f1".into(),
+                    "spotify:folder:f2".into(),
+                    "spotify:playlist:pl4".into(),
+                    "spotify:playlist:pl5".into(),
+                ];
                 app.collapsed_folders = vec!["f2".into()];
             }
             "small" => app.settings.skin_scale = Some(1),
@@ -1370,70 +1382,33 @@ mod tests {
     /// shrinks a little for a long translation and gives way entirely in
     /// the narrowest sidebar, but stays where there is room.
     #[test]
-    fn the_library_heading_never_overlaps_its_buttons() {
-        fn texts(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
-            match shape {
-                egui::epaint::Shape::Text(text) => out.push((
-                    text.galley.job.text.clone(),
-                    text.galley.rect.translate(text.pos.to_vec2()),
-                )),
-                egui::epaint::Shape::Vec(shapes) => {
-                    shapes.iter().for_each(|shape| texts(shape, out));
-                }
-                _ => {}
-            }
-        }
-        for locale in [crate::i18n::Locale::English, crate::i18n::Locale::German] {
+    fn pins_sidebar_has_no_toolbar_or_filters_in_both_themes_and_narrow_windows() {
+        for dark in [true, false] {
             for width in [210.0, 250.0, 420.0] {
-                let (ctx, mut app) = accessible_app("library-heading");
-                app.locale = locale;
+                let (ctx, mut app) = accessible_app("pins-no-toolbar");
                 app.settings.sidebar_width = width;
-                let heading = crate::i18n::gettext(locale, "Library").into_owned();
-                let search = crate::i18n::gettext(locale, "Search Your Library").into_owned();
-                let mut last = None;
-                for _ in 0..2 {
-                    let mut output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(1280.0, 800.0),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| app.frame_ui(ui),
-                    );
-                    output.textures_delta.clear();
-                    last = Some(output);
-                }
-                let output = last.unwrap();
-                let mut drawn = Vec::new();
-                output
-                    .shapes
-                    .iter()
-                    .for_each(|shape| texts(&shape.shape, &mut drawn));
-                let label = drawn
-                    .iter()
-                    .find(|(text, rect)| *text == heading && rect.top() < 300.0)
-                    .map(|(_, rect)| *rect);
-                let tree = output.platform_output.accesskit_update.unwrap();
-                let button = tree
-                    .nodes
-                    .iter()
-                    .find(|(_, node)| node.label() == Some(search.as_str()))
-                    .and_then(|(_, node)| node.bounds())
-                    .expect("the Search Your Library button");
-                if let Some(label) = label {
+                ctx.set_theme(if dark {
+                    egui::ThemePreference::Dark
+                } else {
+                    egui::ThemePreference::Light
+                });
+                accessible_frame(&ctx, &mut app, vec![]);
+                let tree = accessible_frame(&ctx, &mut app, vec![]);
+                for hidden in [
+                    "Library",
+                    "By You",
+                    "Local custom order",
+                    "Search Your Library",
+                    "Show as grid",
+                    "Create a playlist",
+                    "Hide sidebar (Ctrl+B)",
+                ] {
                     assert!(
-                        f64::from(label.right()) <= button.x0,
-                        "{locale:?} at {width}: the heading ends at {} but the button starts at {}",
-                        label.right(),
-                        button.x0
-                    );
-                }
-                if width >= 250.0 {
-                    assert!(
-                        label.is_some(),
-                        "{locale:?} at {width}: the heading has room"
+                        !tree
+                            .nodes
+                            .iter()
+                            .any(|(_, node)| node.label() == Some(hidden)),
+                        "unexpected control: {hidden}"
                     );
                 }
                 app.backend.shutdown();
@@ -1606,77 +1581,30 @@ mod tests {
     /// Drive By You through accessible button actions, verify owned rows remain
     /// visible, and confirm switching shelves preserves the remembered choice.
     #[test]
-    fn by_you_sidebar_filter_can_be_toggled_and_survives_shelf_switches() {
-        use egui::accesskit::{Action as AccessibleAction, Role};
-        let (ctx, mut app) = accessible_app("by-you");
-        app.settings.art_expanded = false;
-        accessible_frame(&ctx, &mut app, vec![]);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        accessible_node(&tree, "Discover Weekly", Role::Button);
-        let by_you = accessible_node(&tree, "By You", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(by_you, AccessibleAction::Click, None)],
-        );
-        assert!(app.settings.library_by_you);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        accessible_node(&tree, "Liked Songs", Role::Button);
-        accessible_node(&tree, "Late night focus", Role::Button);
-        assert!(
-            !tree
-                .nodes
-                .iter()
-                .any(|(_, node)| node.label() == Some("Discover Weekly"))
-        );
-        let albums = accessible_node(&tree, "Albums", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(albums, AccessibleAction::Click, None)],
-        );
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        assert!(
-            !tree
-                .nodes
-                .iter()
-                .any(|(_, node)| node.label() == Some("By You"))
-        );
-        let playlists = accessible_node(&tree, "Playlists", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(playlists, AccessibleAction::Click, None)],
-        );
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let by_you = accessible_node(&tree, "By You", Role::Button);
-        assert!(app.settings.library_by_you);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(by_you, AccessibleAction::Click, None)],
-        );
-        assert!(!app.settings.library_by_you);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        accessible_node(&tree, "Discover Weekly", Role::Button);
+    fn legacy_ownership_and_search_filters_cannot_hide_a_pinned_followed_playlist() {
+        let (ctx, mut app) = accessible_app("pins-ignore-filters");
+        app.settings.pinned_contexts = vec!["spotify:playlist:pl0".into()];
+        app.settings.library_by_you = true;
+        app.library.filter = "no match".into();
+        view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        let painted = view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        assert!(painted.iter().any(|(name, _)| name == "Discover Weekly"));
+        assert!(!painted.iter().any(|(name, _)| name == "Late night focus"));
         app.backend.shutdown();
     }
 
     #[test]
-    fn translated_sidebar_keeps_keyboard_navigation_and_accessible_names() {
+    fn translated_pins_keep_keyboard_navigation_and_accessible_names() {
         use crate::i18n::{Locale, gettext};
         use clap::ValueEnum;
         use egui::accesskit::{Action as AccessibleAction, Role};
         for &locale in Locale::value_variants() {
-            let (ctx, mut app) = accessible_app(&format!("translated-sidebar-{locale:?}"));
+            let (ctx, mut app) = accessible_app(&format!("translated-pins-{locale:?}"));
             app.locale = locale;
             accessible_frame(&ctx, &mut app, vec![]);
             let tree = accessible_frame(&ctx, &mut app, vec![]);
             let home = accessible_node(&tree, &gettext(locale, "Home"), Role::Button);
             let search = accessible_node(&tree, &gettext(locale, "Search"), Role::Button);
-            accessible_node(&tree, &gettext(locale, "Create a playlist"), Role::Button);
-            accessible_node(&tree, &gettext(locale, "Albums"), Role::Button);
-            accessible_node(&tree, &gettext(locale, "Artists"), Role::Button);
             let liked = accessible_node(&tree, &gettext(locale, "Liked Songs"), Role::Button);
             accessible_frame(
                 &ctx,
@@ -1688,7 +1616,7 @@ mod tests {
                 &mut app,
                 vec![keyboard(egui::Key::Tab, egui::Modifiers::NONE)],
             );
-            assert_eq!(tree.focus, search, "Tab order must survive translation");
+            assert_eq!(tree.focus, search);
             accessible_frame(
                 &ctx,
                 &mut app,
@@ -1700,34 +1628,6 @@ mod tests {
                 vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
             );
             assert_eq!(app.page(), &Page::LikedSongs);
-
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            let library_search =
-                accessible_node(&tree, &gettext(locale, "Search Your Library"), Role::Button);
-            accessible_frame(
-                &ctx,
-                &mut app,
-                vec![accessible_action(
-                    library_search,
-                    AccessibleAction::Click,
-                    None,
-                )],
-            );
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            accessible_node(
-                &tree,
-                &gettext(locale, "Search in Your Library"),
-                Role::TextInput,
-            );
-            app.library.filter = gettext(locale, "Liked Songs").to_uppercase();
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            accessible_node(&tree, &gettext(locale, "Liked Songs"), Role::Button);
-            assert!(
-                !tree
-                    .nodes
-                    .iter()
-                    .any(|(_, node)| node.label() == Some("Discover Weekly"))
-            );
             app.backend.shutdown();
         }
     }
@@ -2151,67 +2051,19 @@ mod tests {
     }
 
     #[test]
-    fn library_sort_menu_preserves_saved_order_and_keyboard_activation() {
-        use crate::settings::{LibraryShelf, LibrarySort};
-        use egui::accesskit::{Action as AccessibleAction, Role};
-        let (ctx, mut app) = accessible_app("library-sort");
-        app.settings.sidebar_order =
-            vec!["spotify:playlist:pl4".into(), "spotify:playlist:pl1".into()];
-        let saved = app.settings.sidebar_order.clone();
-        accessible_frame(&ctx, &mut app, vec![]);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let sort = accessible_node(&tree, "Local custom order", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(sort, AccessibleAction::Click, None)],
+    fn legacy_sort_preferences_cannot_change_the_pin_order() {
+        let (ctx, mut app) = accessible_app("pins-ignore-sort");
+        app.settings.pinned_contexts =
+            vec!["spotify:playlist:pl0".into(), "spotify:playlist:pl1".into()];
+        app.settings.library_sort.insert(
+            crate::settings::LibraryShelf::Playlists,
+            crate::settings::LibrarySort::Name,
         );
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        assert!(
-            !tree
-                .nodes
-                .iter()
-                .any(|(_, node)| node.label() == Some("Recently added"))
-        );
-        let name = accessible_node(&tree, "Name", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(name, AccessibleAction::Focus, None)],
-        );
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![keyboard(egui::Key::Enter, egui::Modifiers::NONE)],
-        );
-        assert_eq!(
-            app.settings.library_sort.get(&LibraryShelf::Playlists),
-            Some(&LibrarySort::Name)
-        );
-        assert_eq!(app.settings.sidebar_order, saved);
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let sort = accessible_node(&tree, "Name", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(sort, AccessibleAction::Click, None)],
-        );
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let local = accessible_node(&tree, "Local custom order", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(local, AccessibleAction::Click, None)],
-        );
-        assert_eq!(
-            app.settings.library_sort.get(&LibraryShelf::Playlists),
-            Some(&LibrarySort::Local)
-        );
-        assert_eq!(app.settings.sidebar_order, saved);
-        let restored: Settings =
-            serde_json::from_str(&serde_json::to_string(&app.settings).unwrap()).unwrap();
-        assert_eq!(restored.library_sort, app.settings.library_sort);
-        assert_eq!(restored.sidebar_order, saved);
+        view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        let painted = view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        let first = sidebar_text(&painted, "Discover Weekly");
+        let second = sidebar_text(&painted, "Late night focus");
+        assert!(first.top() < second.top());
         app.backend.shutdown();
     }
 
@@ -2338,65 +2190,39 @@ mod tests {
     /// Spotify lists audiobooks among saved shows, but librespot can't play
     /// them, so the Podcasts shelf leaves out any show marked as one.
     #[test]
-    fn the_podcasts_shelf_leaves_out_audiobooks() {
-        let (ctx, mut app) = accessible_app("library-podcasts-audiobooks");
-        let view = crate::ui::sidebar::show;
-        view_frame(&ctx, &mut app, vec![], view);
-        let painted = view_frame(&ctx, &mut app, vec![], view);
-        let chip = painted
-            .iter()
-            .find(|(text, _)| text == "Podcasts")
-            .unwrap()
-            .1
-            .center();
-        view_frame(
-            &ctx,
-            &mut app,
-            pointer_click(chip, egui::PointerButton::Primary),
-            view,
-        );
-        let shows: Vec<(String, String)> = app
+    fn pins_leave_out_known_unplayable_audiobooks() {
+        let (ctx, mut app) = accessible_app("pins-audiobooks");
+        let shows: Vec<_> = app
             .library
             .shows
             .items
             .iter()
+            .take(2)
             .map(|saved| (saved.show.uri.clone(), saved.show.name.clone()))
             .collect();
-        assert!(shows.len() >= 2, "the demo library saves several shows");
-        let painted = view_frame(&ctx, &mut app, vec![], view);
-        assert!(painted.iter().any(|(text, _)| *text == shows[0].1));
-
+        assert_eq!(shows.len(), 2);
+        app.settings.pinned_contexts = shows.iter().map(|(uri, _)| uri.clone()).collect();
         app.audiobook_shows.insert(shows[0].0.clone());
-        let painted = view_frame(&ctx, &mut app, vec![], view);
-        assert!(!painted.iter().any(|(text, _)| *text == shows[0].1));
-        assert!(painted.iter().any(|(text, _)| *text == shows[1].1));
+        view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        let painted = view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        assert!(!painted.iter().any(|(name, _)| *name == shows[0].1));
+        assert!(painted.iter().any(|(name, _)| *name == shows[1].1));
         app.backend.shutdown();
     }
 
     #[test]
-    fn library_grid_toggle_is_accessible_and_persistent() {
-        use egui::accesskit::{Action as AccessibleAction, Role};
-        let (ctx, mut app) = accessible_app("library-grid-toggle");
+    fn saved_grid_layout_stays_readable_without_a_sidebar_toggle() {
+        let (ctx, mut app) = accessible_app("pins-saved-grid");
+        app.settings.sidebar_grid = true;
+        accessible_frame(&ctx, &mut app, vec![]);
         let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let grid = accessible_node(&tree, "Show as grid", Role::Button);
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(grid, AccessibleAction::Click, None)],
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Show as list"))
         );
         assert!(app.settings.sidebar_grid);
-
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let list = accessible_node(&tree, "Show as list", Role::Button);
-        assert!(tree.nodes.iter().any(|(_, node)| {
-            node.role() == Role::Button && node.label() == Some("Discover Weekly")
-        }));
-        accessible_frame(
-            &ctx,
-            &mut app,
-            vec![accessible_action(list, AccessibleAction::Click, None)],
-        );
-        assert!(!app.settings.sidebar_grid);
         app.backend.shutdown();
     }
 
@@ -2420,6 +2246,10 @@ mod tests {
             },
             FolderEnd,
         ];
+        app.settings.pinned_contexts = vec![
+            "spotify:folder:focus".into(),
+            "spotify:folder:weekend".into(),
+        ];
         app.collapsed_folders = vec!["weekend".into()];
 
         let tree = accessible_frame(&ctx, &mut app, vec![]);
@@ -2429,56 +2259,42 @@ mod tests {
     }
 
     #[test]
-    fn library_context_menu_labels_follow_the_locale() {
+    fn pinned_liked_songs_unpin_menu_follows_the_locale() {
         use crate::i18n::{Locale, gettext};
         use egui::accesskit::{Action as AccessibleAction, Role};
-        let (ctx, mut app) = accessible_app("library-menu-locale");
+        let (ctx, mut app) = accessible_app("localized-pin-menu");
         app.locale = Locale::German;
-        app.settings.liked_songs_pinned = false;
-        let row = |tree: &egui::accesskit::TreeUpdate, label: &str| {
-            let bounds = tree
-                .nodes
-                .iter()
-                .find(|(_, node)| {
-                    node.role() == Role::Button
-                        && node.label() == Some(label)
-                        && node.bounds().is_some_and(|bounds| bounds.x0 < 250.0)
-                })
-                .unwrap_or_else(|| panic!("missing sidebar row {label}"))
-                .1
-                .bounds()
-                .unwrap();
-            egui::Rect::from_min_max(
-                egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
-                egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
-            )
-        };
-
+        app.settings.pinned_contexts.clear();
+        accessible_frame(&ctx, &mut app, vec![]);
         let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let liked = row(&tree, &gettext(Locale::German, "Liked Songs")).center();
+        let id = accessible_node(&tree, &gettext(Locale::German, "Liked Songs"), Role::Button);
+        let bounds = tree
+            .nodes
+            .iter()
+            .find(|(held, _)| *held == id)
+            .unwrap()
+            .1
+            .bounds()
+            .unwrap();
         accessible_frame(
             &ctx,
             &mut app,
-            pointer_click(liked, egui::PointerButton::Secondary),
+            pointer_click(
+                egui::pos2(
+                    (bounds.x0 + bounds.x1) as f32 / 2.0,
+                    (bounds.y0 + bounds.y1) as f32 / 2.0,
+                ),
+                egui::PointerButton::Secondary,
+            ),
         );
         let tree = accessible_frame(&ctx, &mut app, vec![]);
-        accessible_node(&tree, &gettext(Locale::German, "Play"), Role::Button);
-        let pin = accessible_node(&tree, &gettext(Locale::German, "Pin to top"), Role::Button);
+        let unpin = accessible_node(&tree, &gettext(Locale::German, "Unpin"), Role::Button);
         accessible_frame(
             &ctx,
             &mut app,
-            vec![accessible_action(pin, AccessibleAction::Click, None)],
+            vec![accessible_action(unpin, AccessibleAction::Click, None)],
         );
-
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let liked = row(&tree, &gettext(Locale::German, "Liked Songs")).center();
-        accessible_frame(
-            &ctx,
-            &mut app,
-            pointer_click(liked, egui::PointerButton::Secondary),
-        );
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        accessible_node(&tree, &gettext(Locale::German, "Unpin"), Role::Button);
+        assert!(!app.settings.liked_songs_pinned);
         app.backend.shutdown();
     }
 
@@ -2783,56 +2599,19 @@ mod tests {
     }
 
     #[test]
-    fn library_sorts_finish_paging_without_retrying_failed_pages() {
-        use crate::settings::{LibraryShelf, LibrarySort};
-        for (shelf, label, page) in [
-            (LibraryShelf::Albums, "Albums", Page::Albums),
-            (LibraryShelf::Artists, "Artists", Page::Artists),
-            (LibraryShelf::Podcasts, "Podcasts", Page::Podcasts),
-        ] {
-            let (ctx, mut app) = accessible_app(&format!("library-sort-paging-{shelf:?}"));
-            let view = crate::ui::sidebar::show;
-            app.settings.library_sort.insert(shelf, LibrarySort::Name);
-            app.library.albums.next_offset = Some(50);
-            app.library.artists.complete = false;
-            app.library.artists.after = Some("next".into());
-            app.library.shows.next_offset = Some(50);
-            view_frame(&ctx, &mut app, vec![], view);
-            let painted = view_frame(&ctx, &mut app, vec![], view);
-            let position = painted
+    fn pins_sidebar_does_not_fetch_unpinned_library_shelves() {
+        let (ctx, mut app) = accessible_app("pins-no-paging");
+        app.settings.pinned_contexts = vec!["spotify:playlist:pl2".into()];
+        app.library.albums.next_offset = Some(50);
+        app.library.shows.next_offset = Some(50);
+        app.actions.clear();
+        view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        assert!(
+            !app.actions
                 .iter()
-                .find(|(text, _)| text == label)
-                .unwrap()
-                .1
-                .center();
-            view_frame(
-                &ctx,
-                &mut app,
-                pointer_click(position, egui::PointerButton::Primary),
-                view,
-            );
-            app.actions.clear();
-            view_frame(&ctx, &mut app, vec![], view);
-            assert!(
-                app.actions
-                    .iter()
-                    .any(|action| matches!(action, Action::LoadMore(found) if *found == page))
-            );
-            app.actions.clear();
-            app.library.albums.error = Some("Try again later".into());
-            app.library.artists.error = Some("Try again later".into());
-            app.library.shows.error = Some("Try again later".into());
-            for _ in 0..3 {
-                view_frame(&ctx, &mut app, vec![], view);
-                assert!(
-                    !app.actions
-                        .iter()
-                        .any(|action| matches!(action, Action::LoadMore(found) if *found == page)),
-                    "failed pages must not retry every frame"
-                );
-            }
-            app.backend.shutdown();
-        }
+                .any(|action| matches!(action, Action::LoadMore(_)))
+        );
+        app.backend.shutdown();
     }
 
     #[test]
@@ -7107,6 +6886,7 @@ mod tests {
             RootlistEntry::Playlist("spotify:playlist:pl2".into()),
             RootlistEntry::FolderEnd,
         ];
+        app.settings.pinned_contexts = vec!["spotify:folder:f1".into()];
         let view = crate::ui::sidebar::show;
         view_frame(&ctx, &mut app, vec![], view);
         let painted = view_frame(&ctx, &mut app, vec![], view);
@@ -8299,117 +8079,44 @@ mod tests {
 
     /// Reordering unpinned playlists creates a custom sidebar order.
     #[test]
-    fn dropping_between_unpinned_playlists_creates_the_custom_order() {
-        let root =
-            std::env::temp_dir().join(format!("spotifast-unpinned-test-{}", std::process::id()));
-        let dirs = AppDirs {
-            config: root.join("config"),
-            state: root.join("state"),
-            cache: root.join("cache"),
-        };
-        let ctx = egui::Context::default();
-        let waker = crate::backend::Waker::default();
-        waker.attach(&ctx);
-        let mut app = App::new(
-            &waker,
-            dirs,
-            Settings::default(),
-            AppOptions {
-                media_controls: false,
-                restore_sign_in: false,
-                tray: false,
-            },
-        );
-        app.attach(&ctx);
-        populate(&mut app);
-        assert!(app.settings.pinned_contexts.is_empty());
-        assert!(app.settings.sidebar_order.is_empty());
-        for _ in 0..3 {
-            frame(&ctx, &mut app);
-        }
-
-        // Sweep from the top; the first slot inside the list is the one
-        // right under Liked Songs, between what were the first two
-        // unpinned playlists.
-        let mut dropped = false;
-        for step in 0..40 {
-            let pos = egui::pos2(120.0, 100.0 + step as f32 * 10.0);
-            egui::DragAndDrop::set_payload(
-                &ctx,
-                DragEntry {
-                    uri: "spotify:playlist:pl4".into(),
-                    title: "Release Radar".into(),
-                    image: None,
-                },
-            );
-            frame_events(&ctx, &mut app, vec![egui::Event::PointerMoved(pos)]);
-            frame_events(
-                &ctx,
-                &mut app,
-                vec![egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-            );
-            egui::DragAndDrop::clear_payload(&ctx);
-            if !app.settings.sidebar_order.is_empty() {
-                dropped = true;
-                break;
-            }
-        }
-        assert!(dropped, "no sweep position landed below Liked Songs");
-        let expected: Vec<String> = [0, 4]
-            .into_iter()
-            .chain((1..PLAYLISTS.len()).filter(|index| *index != 4))
-            .map(|index| format!("spotify:playlist:pl{index}"))
-            .collect();
-        assert_eq!(app.settings.sidebar_order, expected);
-        assert_eq!(
-            app.settings.library_pins(),
-            [crate::settings::LIKED_SONGS_KEY]
-        );
+    fn following_a_playlist_does_not_add_it_to_the_sidebar() {
+        let (ctx, mut app) = accessible_app("pins-followed-hidden");
+        app.settings.pinned_contexts.clear();
+        view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        let painted = view_frame(&ctx, &mut app, vec![], crate::ui::sidebar::show);
+        assert!(painted.iter().any(|(name, _)| name == "Liked Songs"));
+        assert!(!painted.iter().any(|(name, _)| name == "Discover Weekly"));
         app.backend.shutdown();
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn dragging_liked_songs_moves_it_and_its_menu_can_pin_it_again() {
+    fn dragging_liked_songs_to_the_end_keeps_it_pinned() {
         use crate::settings::LIKED_SONGS_KEY;
         use egui::accesskit::Role;
         for compact in [false, true] {
-            let (ctx, mut app) = accessible_app(&format!("liked-drag-{compact}"));
+            let (ctx, mut app) = accessible_app(&format!("pin-liked-last-{compact}"));
             app.settings.sidebar_compact = compact;
-            app.rootlist.clear();
-            app.settings.pinned_contexts = vec!["spotify:playlist:pl2".into()];
-            app.settings.sidebar_order = (0..PLAYLISTS.len())
-                .filter(|index| *index != 2)
-                .map(|index| format!("spotify:playlist:pl{index}"))
-                .collect();
-            let row = |tree: &egui::accesskit::TreeUpdate, label: &str| {
-                let bounds = tree
+            app.settings.pinned_contexts =
+                vec![LIKED_SONGS_KEY.into(), "spotify:playlist:pl1".into()];
+            accessible_frame(&ctx, &mut app, vec![]);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let rect = |label| {
+                let id = accessible_node(&tree, label, Role::Button);
+                let b = tree
                     .nodes
                     .iter()
-                    .find(|(_, node)| {
-                        node.role() == Role::Button
-                            && node.label() == Some(label)
-                            && node.bounds().is_some_and(|bounds| bounds.x0 < 250.0)
-                    })
-                    .unwrap_or_else(|| panic!("missing sidebar row {label}"))
+                    .find(|(held, _)| *held == id)
+                    .unwrap()
                     .1
                     .bounds()
                     .unwrap();
                 egui::Rect::from_min_max(
-                    egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
-                    egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
                 )
             };
-            accessible_frame(&ctx, &mut app, vec![]);
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            let source = row(&tree, "Liked Songs").center();
-            let target = row(&tree, "Late night focus");
-            let target = egui::pos2(source.x, target.top() + 1.0);
+            let source = rect("Liked Songs").center();
+            let target = egui::pos2(source.x, rect("Late night focus").bottom() - 1.0);
             accessible_frame(
                 &ctx,
                 &mut app,
@@ -8428,10 +8135,6 @@ mod tests {
                 &mut app,
                 vec![egui::Event::PointerMoved(source + egui::vec2(12.0, 0.0))],
             );
-            assert_eq!(
-                egui::DragAndDrop::payload::<DragEntry>(&ctx).unwrap().uri,
-                LIKED_SONGS_KEY
-            );
             accessible_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(target)]);
             accessible_frame(
                 &ctx,
@@ -8442,109 +8145,12 @@ mod tests {
                     pressed: false,
                     modifiers: egui::Modifiers::NONE,
                 }],
-            );
-            assert!(!app.settings.liked_songs_pinned);
-            assert_eq!(
-                &app.settings.sidebar_order[..3],
-                [
-                    "spotify:playlist:pl0",
-                    LIKED_SONGS_KEY,
-                    "spotify:playlist:pl1"
-                ]
-            );
-            let expected = app.settings.sidebar_order.clone();
-            let path = app.dirs.config.join("liked-placement.json");
-            app.settings.save(&path);
-            app.settings = Settings::load(&path);
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            assert_eq!(app.settings.sidebar_order, expected);
-            assert!(row(&tree, "Discover Weekly").top() < row(&tree, "Liked Songs").top());
-            assert!(row(&tree, "Liked Songs").top() < row(&tree, "Late night focus").top());
-            let source = row(&tree, "Liked Songs").center();
-            accessible_frame(
-                &ctx,
-                &mut app,
-                pointer_click(source, egui::PointerButton::Secondary),
-            );
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            let pin = accessible_node(&tree, "Pin to top", Role::Button);
-            accessible_frame(
-                &ctx,
-                &mut app,
-                vec![accessible_action(pin, egui::accesskit::Action::Click, None)],
             );
             assert_eq!(
                 app.settings.library_pins(),
-                ["spotify:playlist:pl2", LIKED_SONGS_KEY]
+                ["spotify:playlist:pl1", LIKED_SONGS_KEY]
             );
-            assert!(
-                !app.settings
-                    .sidebar_order
-                    .iter()
-                    .any(|key| key == LIKED_SONGS_KEY)
-            );
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            let source = row(&tree, "Liked Songs").center();
-            accessible_frame(
-                &ctx,
-                &mut app,
-                pointer_click(source, egui::PointerButton::Secondary),
-            );
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            let unpin = accessible_node(&tree, "Unpin", Role::Button);
-            accessible_frame(
-                &ctx,
-                &mut app,
-                vec![accessible_action(
-                    unpin,
-                    egui::accesskit::Action::Click,
-                    None,
-                )],
-            );
-            assert!(!app.settings.liked_songs_pinned);
-            let tree = accessible_frame(&ctx, &mut app, vec![]);
-            let target = row(&tree, "Liked Songs").center();
-            app.saved.insert("spotify:track:trk0".into(), false);
-            let source = egui::pos2(40.0, 755.0);
-            accessible_frame(
-                &ctx,
-                &mut app,
-                vec![
-                    egui::Event::PointerMoved(source),
-                    egui::Event::PointerButton {
-                        pos: source,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ],
-            );
-            accessible_frame(
-                &ctx,
-                &mut app,
-                vec![egui::Event::PointerMoved(source + egui::vec2(16.0, 0.0))],
-            );
-            assert_eq!(
-                egui::DragAndDrop::payload::<DragTrack>(&ctx).unwrap().items[0].uri(),
-                "spotify:track:trk0"
-            );
-            accessible_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(target)]);
-            accessible_frame(
-                &ctx,
-                &mut app,
-                vec![egui::Event::PointerButton {
-                    pos: target,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-            );
-            assert_eq!(
-                app.is_saved("spotify:track:trk0"),
-                Some(true),
-                "dropping a song on the relocated row still saves it"
-            );
-            assert!(app.backend.take_playlist_add_requests().is_empty());
+            assert!(app.settings.liked_songs_pinned);
             app.backend.shutdown();
         }
     }
@@ -9032,6 +8638,7 @@ mod tests {
                 .iter()
                 .map(|playlist| playlist.uri.clone())
                 .collect();
+            app.settings.pinned_contexts = app.settings.sidebar_order.clone();
             app.library.playlists = Loadable::Loaded(playlists);
             let original = app.settings.sidebar_order.clone();
             accessible_frame(&ctx, &mut app, vec![]);
@@ -9377,91 +8984,203 @@ mod tests {
         assert!(older.sidebar_order.is_empty());
     }
 
-    /// Clicking the search icon in the library header reveals and focuses
-    /// the sidebar search field.
     #[test]
-    fn clicking_search_in_library_shelf_focuses_search_field() {
-        let root = std::env::temp_dir().join(format!(
-            "spotifast-sidebar-search-focus-test-{}",
-            std::process::id()
-        ));
-        let dirs = AppDirs {
-            config: root.join("config"),
-            state: root.join("state"),
-            cache: root.join("cache"),
-        };
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
-        let waker = crate::backend::Waker::default();
-        waker.attach(&ctx);
-        let mut app = App::new(
-            &waker,
-            dirs,
-            Settings::default(),
-            AppOptions {
-                media_controls: false,
-                restore_sign_in: false,
-                tray: false,
+    fn your_episodes_pin_opens_saved_episodes_in_list_and_grid() {
+        use egui::accesskit::Role;
+        for grid in [false, true] {
+            let (ctx, mut app) = accessible_app(&format!("episodes-pin-{grid}"));
+            app.settings.sidebar_grid = grid;
+            app.settings.pinned_contexts = vec!["spotifast:episodes".into()];
+            accessible_frame(&ctx, &mut app, vec![]);
+            let tree = accessible_frame(&ctx, &mut app, vec![]);
+            let id = accessible_node(&tree, "Your Episodes", Role::Button);
+            let bounds = tree
+                .nodes
+                .iter()
+                .find(|(held, _)| *held == id)
+                .unwrap()
+                .1
+                .bounds()
+                .unwrap();
+            let point = egui::pos2(
+                (bounds.x0 + bounds.x1) as f32 / 2.0,
+                (bounds.y0 + bounds.y1) as f32 / 2.0,
+            );
+            accessible_frame(
+                &ctx,
+                &mut app,
+                pointer_click(point, egui::PointerButton::Primary),
+            );
+            assert_eq!(app.page(), &Page::Episodes);
+            app.backend.shutdown();
+        }
+    }
+
+    #[test]
+    fn failed_saved_episodes_wait_for_retry_without_claiming_the_library_is_empty() {
+        fn episodes(app: &mut App, ui: &mut egui::Ui) {
+            crate::ui::library::show(app, ui, Page::Episodes);
+        }
+        let (ctx, mut app) = accessible_app("episodes-failed");
+        app.library.episodes.items.clear();
+        app.library.episodes.next_offset = Some(0);
+        app.library.episodes.fail("Connection interrupted".into());
+        for _ in 0..3 {
+            app.actions.clear();
+            let painted = view_frame(&ctx, &mut app, vec![], episodes);
+            assert!(
+                painted
+                    .iter()
+                    .any(|(text, _)| text == "Connection interrupted")
+            );
+            assert!(!painted.iter().any(|(text, _)| text == "No saved episodes"));
+            assert!(
+                !app.actions
+                    .iter()
+                    .any(|action| matches!(action, crate::model::Action::LoadMore(Page::Episodes)))
+            );
+            assert!(!app.library.episodes.loading);
+        }
+        app.backend.shutdown();
+    }
+
+    #[test]
+    fn saved_episodes_hide_blank_rows_but_keep_valid_rows_after_an_unavailable_page() {
+        use crate::api::models::{Episode, Page as ApiPage, SavedEpisode};
+        fn episodes(app: &mut App, ui: &mut egui::Ui) {
+            crate::ui::library::show(app, ui, Page::Episodes);
+        }
+        let (ctx, mut app) = accessible_app("episodes-unavailable");
+        app.library.episodes = Default::default();
+        app.library.episodes.absorb(
+            0,
+            ApiPage {
+                items: vec![
+                    SavedEpisode::default(),
+                    SavedEpisode {
+                        episode: Episode {
+                            release_date: Some("0000".into()),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                ],
+                total: 3,
+                limit: 2,
+                next: Some("next-page".into()),
+                ..Default::default()
             },
         );
-        app.attach(&ctx);
-        populate(&mut app);
-
-        // Use the button's actual bounds: the header can gain controls
-        // without changing which button this pointer test exercises.
-        let tree = accessible_frame(&ctx, &mut app, vec![]);
-        let search = accessible_node(&tree, "Search Your Library", egui::accesskit::Role::Button);
-        let bounds = tree
-            .nodes
-            .iter()
-            .find(|(id, _)| *id == search)
-            .and_then(|(_, node)| node.bounds())
-            .expect("Search Your Library bounds");
-        let search_pos = egui::pos2(
-            ((bounds.x0 + bounds.x1) / 2.0) as f32,
-            ((bounds.y0 + bounds.y1) / 2.0) as f32,
-        );
-
-        // Click on the search button in the Library shelf header.
-        frame_events(
-            &ctx,
-            &mut app,
-            vec![
-                egui::Event::PointerMoved(search_pos),
-                egui::Event::PointerButton {
-                    pos: search_pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::NONE,
-                },
-                egui::Event::PointerButton {
-                    pos: search_pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::NONE,
-                },
-            ],
-        );
-
-        // Advance one frame so the focused widget processes events.
-        frame(&ctx, &mut app);
-
-        // Verify the search field is shown and has keyboard focus.
-        let search_id = egui::Id::new("sidebar-search");
-        let has_focus = ctx.memory(|m| m.has_focus(search_id));
+        let painted = view_frame(&ctx, &mut app, vec![], episodes);
+        assert!(!painted.iter().any(|(text, _)| text.contains("0000")));
         assert!(
-            has_focus,
-            "sidebar-search must have keyboard focus after clicking the search icon"
+            !painted.iter().any(
+                |(text, _)| text == "No saved episodes" || text == "Saved episodes unavailable"
+            )
         );
-
+        assert_eq!(app.library.episodes.next_offset, Some(2));
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, crate::model::Action::LoadMore(Page::Episodes)))
+        );
+        app.library.episodes.absorb(
+            2,
+            ApiPage {
+                items: vec![SavedEpisode {
+                    episode: Episode {
+                        name: "An available episode".into(),
+                        uri: "spotify:episode:available".into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }],
+                total: 3,
+                offset: 2,
+                limit: 2,
+                ..Default::default()
+            },
+        );
+        let painted = view_frame(&ctx, &mut app, vec![], episodes);
+        assert!(
+            painted
+                .iter()
+                .any(|(text, _)| text == "An available episode")
+        );
+        assert!(!painted.iter().any(|(text, _)| text.contains("0000")));
+        app.library.episodes.items.pop();
+        let painted = view_frame(&ctx, &mut app, vec![], episodes);
+        assert!(
+            painted
+                .iter()
+                .any(|(text, _)| text == "Saved episodes unavailable")
+        );
         app.backend.shutdown();
-        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The pinned sidebar keeps the two general navigation destinations.
+    #[test]
+    fn pins_sidebar_keeps_home_and_global_search_navigation() {
+        use egui::accesskit::Role;
+        let (ctx, mut app) = accessible_app("pins-navigation");
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        accessible_node(&tree, "Home", Role::Button);
+        accessible_node(&tree, "Search", Role::Button);
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Search Your Library"))
+        );
+        app.backend.shutdown();
     }
 
     /// The badges at the right end of the top bar sit in a right-to-left
     /// layout, which does not wrap and does not clip: anything that does not
     /// fit marches left over the search field. Draw the real bar and check
     /// that it never does.
+    #[test]
+    fn quota_status_and_retry_live_in_the_top_bar_popup() {
+        use egui::accesskit::{Action as AccessibleAction, Role};
+        let (ctx, mut app) = accessible_app("topbar-quota");
+        app.settings.web_client_id = Some("test-personal".into());
+        app.backend.pause_for_quota(crate::api::ApiSource::Personal);
+        app.library.episodes.items.clear();
+        app.library
+            .episodes
+            .fail(crate::api::ApiError::QuotaExhausted.to_string());
+        app.open(Page::Episodes);
+        accessible_frame(&ctx, &mut app, vec![]);
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        let badge = accessible_node(&tree, "Quota exceeded", Role::Button);
+        assert!(
+            !tree
+                .nodes
+                .iter()
+                .any(|(_, node)| node.label() == Some("Try again"))
+        );
+        assert!(!tree.nodes.iter().any(|(_, node)| {
+            node.value().is_some_and(|value| {
+                value.contains("Development Mode quota")
+                    || value.contains("Automatic requests are paused")
+            })
+        }));
+        accessible_frame(
+            &ctx,
+            &mut app,
+            vec![accessible_action(badge, AccessibleAction::Click, None)],
+        );
+        let tree = accessible_frame(&ctx, &mut app, vec![]);
+        assert!(
+            tree.nodes
+                .iter()
+                .any(|(_, node)| node.value() == Some("Spotify quota exceeded (personal app)"))
+        );
+        accessible_node(&tree, "Try again", Role::Button);
+        app.backend.shutdown();
+    }
+
     #[test]
     fn the_top_bar_badges_never_cover_the_search_field() {
         use crate::updates::{DownloadState, Installation, Kind, Prepared};
@@ -9551,6 +9270,11 @@ mod tests {
                         + FIELD_RIGHT_INSET;
                     // Collapsed to an icon a badge keeps its label for a screen
                     // reader, so it is found at every width.
+                    let connection = badge("Connection issue").expect("the connection badge");
+                    assert!(
+                        connection >= field,
+                        "connection badge overlaps search at {width}"
+                    );
                     let device = badge("Playing on").expect("the device badge");
                     assert!(
                         device >= field,

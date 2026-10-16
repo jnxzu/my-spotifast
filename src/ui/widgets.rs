@@ -1171,6 +1171,9 @@ pub fn context_menu_items(
             label: name.to_string(),
         });
     }
+    if matches!(kind, "playlist" | "album" | "artist" | "show") {
+        super::sidebar::pin_menu(app, ui, uri, name);
+    }
     let saved = app.is_saved(uri).unwrap_or(false);
     let (icon, text) = match (kind, saved) {
         ("artist", true) => (Icon::CircleX, pgettext(locale, "artist", "Unfollow")),
@@ -2653,6 +2656,10 @@ pub fn sanitize_error_message<'a>(message: &'a str, locale: Locale) -> std::borr
 }
 
 pub fn error_row(ui: &mut Ui, app: &mut App, message: &str, retry: Option<Page>) {
+    // Quota state and its explicit retry belong to the top bar.
+    if message == crate::api::ApiError::QuotaExhausted.to_string() {
+        return;
+    }
     let palette = app.palette;
     let sanitized = sanitize_error_message(message, app.locale);
     ui.horizontal(|ui| {

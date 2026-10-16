@@ -52,9 +52,10 @@ clients. Spotifast uses its session for:
 - **Playlist permissions.** The rootlist shows when a playlist shared by
   invitation can be edited. The Web API's `collaborative` flag does not cover
   these playlists. Spotifast cannot manage collaborators.
-- **Playlists the shared app would otherwise serve.** Title, cover, and
-  songs of other people's playlists, and of the account's own when there is
-  no personal app, so they open without the shared app's quota. Whether a
+- **Playlist library and contents.** The account's playlist list, plus title,
+  cover, and songs of all playlists, including owned playlists with a personal
+  app configured. These reads prefer the playback session without using Web API
+  quota, retaining Web API fallback when the session cannot answer. Whether a
   playlist is public, the owner's name when the session gives none, and the
   mosaic of a playlist without a cover of its own, come from the Web API's
   library list. These rows carry
