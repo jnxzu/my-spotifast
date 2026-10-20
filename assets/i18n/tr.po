@@ -3349,3 +3349,51 @@ msgstr ""
 #~ msgid "Spotify does not let apps remove one queued song."
 #~ msgstr ""
 #~ "Spotify uygulamaların sıradan tek bir şarkıyı kaldırmasına izin vermiyor."
+
+#: src/ui/home.rs:392 src/ui/new_releases.rs:25
+msgid "New releases"
+msgstr "Yeni çıkanlar"
+
+#: src/ui/new_releases.rs:59
+msgid "No new releases"
+msgstr "Yeni çıkan yok"
+
+#: src/ui/new_releases.rs:34
+msgid "The latest releases from artists you follow, newest first."
+msgstr "Takip ettiğin sanatçıların en yeni çıkışları, en yeniler önce."
+
+#: src/ui/new_releases.rs:62
+msgid "New albums and singles from artists you follow will appear here."
+msgstr ""
+"Takip ettiğin sanatçıların yeni albümleri ve single'ları burada görünecek."
+
+#: src/ui/widgets.rs:712 src/ui/widgets.rs:970
+msgid "Play next"
+msgstr "Sıradaki olarak çal"
+
+#: src/ui/home.rs:371
+msgid "Your top mixes"
+msgstr "En çok dinlediğin mix'ler"
+
+#: src/ui/collection.rs:120
+msgid "Enlarge cover"
+msgstr "Kapağı büyüt"
+
+#: src/ui/settings.rs:82
+msgid "Preset name"
+msgstr "Hazır ayar adı"
+
+#. Translators: a search keyword for saving equalizer presets.
+#: src/ui/settings.rs:97 src/ui/settings.rs:2056
+msgid "Save preset"
+msgstr "Hazır ayarı kaydet"
+
+#. Translators: {name} is the name of an equalizer preset the user saved.
+#: src/ui/settings.rs:114
+#, rust-format
+msgid "Delete “{name}”"
+msgstr "“{name}” ayarını sil"
+
+#: src/app.rs
+msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
+msgstr "Önce çalma listesinin tamamını yükleyin. Tekrarlanan şarkılar Spotify üzerinden kaldırılmalıdır."

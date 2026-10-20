@@ -70,6 +70,18 @@ supply playlist positions, permit edits, extend pagination, or be written back
 to disk until Spotify confirms their snapshot and count. A fresh first page
 replaces an unconfirmed cached prefix.
 
+Web API URI removal can remove every occurrence of a song. The current pinned
+playback dependency lacks exact positional removal, so the app refuses removal
+of repeated songs rather than expanding a selected occurrence into every copy.
+It requires a complete confirmed list with no pending edit to prove uniqueness.
+Use Spotify to remove repeated songs; cached previews and partial lists cannot
+prove which rows a URI removal would affect.
+
+Home's **Your top mixes** uses a second Pathfinder homeSection read alongside
+Made for you. They share tokens, the account cache and a cooldown whose duration
+is the longest Retry-After from either section. Top mixes has no search fallback;
+without a successful session read it stays hidden. Failed refreshes retain cards.
+
 Web API sign-in opens the browser only after its local callback port is available. If
 port 8989 is occupied, an error popup explains the failure. The sign-in card
 keeps a short status and **Try again**, growing to fit the controls. Identical
@@ -170,6 +182,23 @@ account. Reconnecting can still briefly interrupt audio, and the replacement
 engine starts at the volume being heard. This recovery applies to unexpected
 disconnects; changing audio settings still restarts the engine with its
 current-track pickup.
+
+## New releases
+
+New releases uses the playback session's Login5 and client tokens to read
+Spotify's private Pathfinder `queryWhatsNewFeed` query. It requests album
+content only, at most 50 releases, and never sends the mutation that marks
+items seen. This private response may change without notice. The session's
+batched album and track metadata supplies the songs, preserving release and
+disc order. Results are tied to the signed-in account and request generation.
+
+If the session cannot answer, existing Web API routing reads up to 50 followed
+artists and each artist's ten latest albums and singles, deduplicating and
+sorting the results. This approximation is cached in memory for one hour per
+account. Album songs use the existing catalog route and follow its pagination.
+The fork's quota pause and explicit retry rules still apply to those clients.
+Visible release cards join the account-scoped Home cache; songs remain in
+memory. Sign-out discards their state. No new grant or credential file is added.
 
 ## What the client stores
 

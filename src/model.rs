@@ -110,6 +110,8 @@ fn episode_retained_bytes(episode: &Episode) -> usize {
 pub enum Page {
     Home,
     TopSongs,
+    /// The songs of the latest releases from followed artists.
+    NewReleases,
     Search,
     LikedSongs,
     Albums,
@@ -132,6 +134,7 @@ impl Page {
         match self {
             Page::Home => "home".into(),
             Page::TopSongs => "top-songs".into(),
+            Page::NewReleases => "new-releases".into(),
             Page::Search => "search".into(),
             Page::LikedSongs => "liked".into(),
             Page::Albums => "albums".into(),
@@ -152,6 +155,7 @@ impl Page {
         Some(match text {
             "home" => Page::Home,
             "top-songs" => Page::TopSongs,
+            "new-releases" => Page::NewReleases,
             "search" => Page::Search,
             "liked" => Page::LikedSongs,
             "albums" => Page::Albums,
@@ -623,6 +627,19 @@ pub struct HomeData {
     pub made_for_you_loading: bool,
     /// Whether playback was ready when the current shelf request began.
     pub made_for_you_session_requested: bool,
+    /// The latest releases from followed artists, newest first.
+    pub new_releases: Loadable<Vec<Album>>,
+    pub new_releases_generation: u64,
+    /// One outstanding New releases answer counts toward the Home refresh.
+    pub new_releases_loading: bool,
+    /// The songs of `new_releases`, for the New releases page, and the
+    /// releases they were read for.
+    pub new_release_tracks: Loadable<Vec<Track>>,
+    pub new_release_tracks_for: Vec<String>,
+    pub new_release_tracks_generation: u64,
+    /// Changes only when a successful answer replaces the visible songs.
+    pub new_release_tracks_revision: u64,
+    pub top_mixes: Loadable<Vec<Playlist>>,
     /// Saved podcasts with their newest episodes, in library order, for the
     /// podcast shelf. A refresh replaces them only once it answers.
     pub podcasts: Vec<(Show, Vec<Episode>)>,
@@ -666,6 +683,8 @@ pub struct HomeSnapshot {
     /// The ordered shelf and its origin, retained across restarts.
     pub made_for_you: Option<Vec<Playlist>>,
     pub made_for_you_personalized: bool,
+    pub new_releases: Option<Vec<Album>>,
+    pub top_mixes: Option<Vec<Playlist>>,
     /// Legacy search shelves, read for compatibility with older cache files.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub discover: std::collections::BTreeMap<String, Vec<Playlist>>,
@@ -952,6 +971,14 @@ pub struct DragEntry {
 
 #[derive(Clone, Debug)]
 pub enum Dialog {
+    /// A page's header cover, enlarged. Clicking anywhere or Esc closes it.
+    CoverArt {
+        /// The largest artwork Spotify has.
+        url: String,
+        /// The header's own artwork, already loaded, shown until `url` is.
+        shown: Option<String>,
+        title: String,
+    },
     CreatePlaylist {
         name: String,
         public: bool,
@@ -1073,6 +1100,10 @@ pub enum Action {
     /// Queue several songs in order and show one notification.
     QueueMany {
         songs: Vec<(String, String)>,
+    },
+    /// Put songs first in the manual queue, in order, only on this computer.
+    PlayNext {
+        items: Vec<PlayableItem>,
     },
     /// Move a row within the manually queued "Playing next" section, from a
     /// drag dropped back on the queue. Only applied while the local player
@@ -1281,6 +1312,13 @@ pub enum Action {
     SetEqPreamp(f32),
     /// One of Winamp's presets, by its place in the list.
     ApplyEqPreset(usize),
+    /// A preset saved here, by name: its preamp and bands.
+    ApplyUserEqPreset(String),
+    /// Save the preamp and bands as a preset of this name, replacing one
+    /// already saved under it.
+    SaveEqPreset(String),
+    /// Forget a saved preset, by name.
+    DeleteEqPreset(String),
     /// The balance, -1 all left to 1 all right.
     SetBalance(f32),
     ToggleMono,

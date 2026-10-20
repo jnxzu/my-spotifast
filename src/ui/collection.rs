@@ -39,6 +39,8 @@ pub(super) struct Hero<'a> {
 #[derive(Default)]
 pub(super) struct HeroImages<'a> {
     pub image: Option<&'a str>,
+    /// The largest artwork Spotify has, which clicking the cover shows.
+    pub enlarged: Option<&'a str>,
     pub previous: Option<&'a str>,
     pub thumbnail: Option<&'a str>,
     pub align_thumbnail: bool,
@@ -75,6 +77,7 @@ pub(super) fn hero_images<'a>(
     let thumbnail = crate::api::models::SMALL_ART_WIDTH;
     HeroImages {
         image,
+        enlarged: pick_image(images, u32::MAX),
         previous: image.and_then(|image| {
             preview
                 .and_then(|images| pick_image(images, art.card))
@@ -103,7 +106,33 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 24.0;
-        let (rect, _) = ui.allocate_exact_size(Vec2::splat(cover_size), Sense::hover());
+        // Clicking the cover shows it enlarged (#586).
+        let enlarged = hero.images.enlarged.filter(|_| !hero.liked);
+        let (rect, response) = ui.allocate_exact_size(
+            Vec2::splat(cover_size),
+            if enlarged.is_some() {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        if let Some(url) = enlarged {
+            let label = gettext(app.locale, "Enlarge cover");
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.as_ref())
+            });
+            theme::focus_ring(ui, &response);
+            if response
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                app.actions.push(Action::ShowDialog(Dialog::CoverArt {
+                    url: url.to_string(),
+                    shown: hero.images.image.map(str::to_string),
+                    title: hero.title.to_string(),
+                }));
+            }
+        }
         let radius = if hero.round { cover_size / 2.0 } else { 6.0 };
         widgets::paint_shadow(ui, &palette, rect, radius);
         if hero.liked {
@@ -388,23 +417,7 @@ pub fn actions_row(
                     }
                     if let Some((page, loading)) = &actions.reload {
                         widgets::menu_separator(ui, &palette);
-                        let clicked = ui
-                            .add_enabled_ui(!loading, |ui| {
-                                widgets::menu_item(
-                                    ui,
-                                    &palette,
-                                    Some(Icon::Refresh),
-                                    &if *loading {
-                                        gettext(locale, "Refreshing…")
-                                    } else {
-                                        gettext(locale, "Refresh")
-                                    },
-                                )
-                            })
-                            .inner;
-                        if clicked {
-                            app.actions.push(Action::Reload(page.clone()));
-                        }
+                        refresh_menu_item(app, ui, page, *loading);
                     }
                 });
         }
@@ -423,6 +436,30 @@ pub fn actions_row(
         }
     });
     ui.add_space(14.0);
+}
+
+/// A page's **Refresh** menu item, which reloads it from Spotify. It reads
+/// **Refreshing…** and is disabled while the page is loading.
+pub fn refresh_menu_item(app: &mut App, ui: &mut egui::Ui, page: &Page, loading: bool) {
+    let palette = app.palette;
+    let locale = app.locale;
+    let clicked = ui
+        .add_enabled_ui(!loading, |ui| {
+            widgets::menu_item(
+                ui,
+                &palette,
+                Some(Icon::Refresh),
+                &if loading {
+                    gettext(locale, "Refreshing…")
+                } else {
+                    gettext(locale, "Refresh")
+                },
+            )
+        })
+        .inner;
+    if clicked {
+        app.actions.push(Action::Reload(page.clone()));
+    }
 }
 
 /// A track table with virtualised rows and paging.
@@ -2259,7 +2296,7 @@ fn saves_text(locale: Locale, total: u64) -> String {
 }
 
 /// `1,234 songs, 2 hr 13 min` once the whole list is known.
-pub(super) fn songs_and_duration(locale: Locale, count: u32, duration_ms: u64) -> String {
+pub(crate) fn songs_and_duration(locale: Locale, count: u32, duration_ms: u64) -> String {
     ngettext(
         locale,
         // Translators: {count} is a number of songs and {duration} their total

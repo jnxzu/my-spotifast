@@ -704,6 +704,17 @@ pub fn picked_menu(
     });
     ui.add_space(4.0);
     menu_separator(ui, &palette);
+    if menu_item_enabled(
+        ui,
+        &palette,
+        Some(Icon::SkipForward),
+        &gettext(locale, "Play next"),
+        app.queue_locally_reorderable(),
+    ) {
+        app.actions.push(Action::PlayNext {
+            items: songs.to_vec(),
+        });
+    }
     if menu_item(
         ui,
         &palette,
@@ -937,6 +948,17 @@ pub fn item_menu(
     ui.set_max_width(300.0);
     let uri = item.uri().to_string();
     let label = item.name().to_string();
+    if menu_item_enabled(
+        ui,
+        &palette,
+        Some(Icon::SkipForward),
+        &gettext(locale, "Play next"),
+        app.queue_locally_reorderable(),
+    ) {
+        app.actions.push(Action::PlayNext {
+            items: vec![item.clone()],
+        });
+    }
     if menu_item(
         ui,
         &palette,
@@ -1472,10 +1494,15 @@ fn track_row_contents(
     // A queue row is a position, not the song itself: the same song can
     // sit in the queue while it plays (a repeat wrapping around, a song
     // queued twice), and only the Now playing row is the playing one.
+    // A song started from one of its copies in this list marks that copy
+    // alone: the others are other places in the list.
+    let played_copy = app.row_is_played_copy(row.context, row.index, row.item.uri());
     let is_current = !matches!(row.context, RowContext::Queue)
+        && played_copy
         && app
             .current_track_uri()
             .is_some_and(|uri| uri == row.item.uri());
+    let pending = played_copy && app.play_pending(row.item.uri());
     let playing = is_current && app.believed_playing();
     let hovered = ui.is_enabled() && (ui.rect_contains_pointer(rect) || response.has_focus());
     if row.picked {
@@ -1506,7 +1533,7 @@ fn track_row_contents(
     // Number / play.
     if cols.number > 0.0 {
         let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.number, row_height));
-        if app.play_pending(row.item.uri()) {
+        if pending {
             let mut child = ui.new_child(
                 UiBuilder::new()
                     .max_rect(cell)
@@ -1569,7 +1596,7 @@ fn track_row_contents(
                     Color32::from_black_alpha(alpha),
                 );
             };
-            if app.play_pending(row.item.uri()) {
+            if pending {
                 scrim(140);
                 let mut child = ui.new_child(
                     UiBuilder::new()
@@ -2611,6 +2638,24 @@ pub fn shelf(
 ) {
     ui.add_space(8.0);
     theme::section_title(ui, palette, title);
+    shelf_cards(ui, id, add_contents);
+}
+
+/// A shelf whose heading opens its full page.
+pub fn linked_shelf(
+    ui: &mut Ui,
+    palette: &Palette,
+    id: &str,
+    title: &str,
+    add_contents: impl FnOnce(&mut Ui),
+) -> bool {
+    ui.add_space(8.0);
+    let clicked = theme::link(ui, title, theme::bold(17.0), palette.text).clicked();
+    shelf_cards(ui, id, add_contents);
+    clicked
+}
+
+fn shelf_cards(ui: &mut Ui, id: &str, add_contents: impl FnOnce(&mut Ui)) {
     ui.add_space(4.0);
     crate::autoscroll::show(
         ui,

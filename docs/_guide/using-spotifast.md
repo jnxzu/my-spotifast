@@ -5,6 +5,27 @@ description: Play music, arrange playlists, find lyrics, and make Spotifast your
 nav_order: 3
 ---
 
+## Fork additions in 0.14.0
+
+Home's top tiles follow recent listening, with library playlists filling any
+remaining slots. **Your top mixes** appears below Made for you when the
+playback session supplies it; the Made for you visibility option hides both.
+The pins-only sidebar is unchanged.
+
+Choose **Refresh** in a podcast's More menu to fetch new episodes. Existing
+episodes stay visible while the request loads or if it fails. Click an album,
+artist, playlist or podcast header cover to enlarge it; click again or press
+Esc to close it.
+
+In Settings > Equalizer, name the current curve and choose **Save preset**.
+Saving the same name replaces it. Saved presets include the preamp and appear
+in the mini player's PRESETS menu too. Deleting one keeps the current sound.
+
+For repeated playlist songs, playback and highlighting identify the selected
+occurrence. Load the full playlist before removing songs. Repeated songs must
+be removed in Spotify: the current dependency cannot safely delete just one
+occurrence. Unconfirmed cached rows and pending edits also block removal.
+
 ## Middle-click autoscroll
 
 On Windows, since 0.8.0, and on Linux once turned on, middle-click anywhere
@@ -38,6 +59,35 @@ Spotifast cannot play its special context.
 Point at a horizontal shelf, such as Made for you or Recently played on
 Home, and hold `Shift` while turning the mouse wheel. The shelf moves while
 the surrounding page stays put. Release `Shift` to scroll the page normally.
+
+## New releases
+
+Home's **New releases** shelf contains albums, EPs and singles from artists
+you follow. A card opens that release. Click the shelf heading to see their
+songs together, newest release first. Podcasts are excluded. Ctrl-click
+(Cmd-click on macOS), Shift-click and Ctrl+A select songs for the existing
+playlist, queue and Like actions. Play and Shuffle work as on a playlist.
+
+The session reads the feed behind Spotify's bell without marking anything
+seen. It reads at most 50 releases. If the session cannot answer, the Web API
+approximates the feed from the first 50 followed artists. This fallback may
+use the shared API quota. Refresh failures keep existing results; a failed
+initial read offers Retry rather than retrying continuously.
+
+**Play next** in a song or selection menu puts those songs before the current
+manual queue, in displayed order. It is available only while this computer is
+the active player. Add to queue keeps appending after previously queued songs.
+
+Double-clicking a song in search plays that one song. The local repeat mode
+survives restarts. Clicking a liked song's heart in the player bar opens the
+playlist picker, which also offers Remove from Liked Songs; an unliked song's
+heart still likes it immediately. Liked Songs accepts a newer like made on
+another device while still masking Spotify's stale answers after an unlike.
+
+Lyrics respect short LRCLIB rate-limit waits and retry up to three times.
+Winamp sliders respond only on their own tracks. Invalid saved main-window
+sizes reopen at the existing default size. Recommended for you stays hidden
+when Spotify has no top songs to seed it with.
 
 ## Podcasts on Home
 

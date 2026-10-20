@@ -1,5 +1,7 @@
 # Spotifast J
 
+The current source version is 0.14.0.
+
 Connection status and reconnect controls live in the top bar. Spotify quota
 exhaustion pauses requests through the affected API identity until **Try again**
 is selected or the app is restarted.
@@ -15,6 +17,27 @@ still needs a verified Web API grant for the same account.
 
 Personal fork of [crmne/spotifast](https://github.com/crmne/spotifast).
 The repository and local project are named `my-spotifast`.
+
+Home's **New releases** heading opens a songs-only list from the artists you
+follow. Use Ctrl-click, Shift-click or Ctrl+A (Cmd on macOS) to select songs,
+then add the selection to a playlist, queue it or save it to Liked Songs.
+The feed reads up to 50 releases without marking Spotify's bell as seen.
+When its session read fails, the Web API approximates it from up to 50 followed
+artists. Existing cards and songs remain visible if a refresh fails.
+
+Song menus include **Play next** for local playback. Repeat mode survives a
+restart, and double-clicking a search song starts that song alone. A liked
+song's heart opens Add to playlist with an option to remove the like. Lyrics
+retry temporary rate limits, and Liked Songs reconciles songs re-liked on
+another device.
+
+Home's quick-access tiles follow recent listening, and **Your top mixes**
+joins Made for you using the same session cache and cooldown. Podcast pages
+offer **Refresh** in their More menu. Click a page's cover to enlarge it.
+Settings and the mini player can recall named equalizer presets, including
+their preamp gain. Repeated playlist songs play and highlight the selected
+occurrence. Removal refuses repeated songs and unconfirmed or partial lists,
+since the current playback dependency cannot safely delete one occurrence.
 
 The left sidebar keeps Home, Search and a local pin list. It has no library
 filters, toolbar, sorting controls or unpinned followed items. Right-click a

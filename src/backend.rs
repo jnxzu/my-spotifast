@@ -49,6 +49,9 @@ const HOME_EPISODES_PER_SHOW: u32 = 5;
 pub const PLAYLIST_PAGE_SIZE: u32 = 50;
 const RECONNECT_WINDOW: Duration = Duration::from_secs(600);
 const RECONNECT_LIMIT: usize = 6;
+/// Each followed artist's newest albums and singles the New releases
+/// fallback asks for.
+const NEW_RELEASES_PER_ARTIST: u32 = 10;
 /// Seconds between background attempts to bring the engine back with the
 /// saved playback grant after a connection failure that was not a rejected
 /// grant (#818). The last delay repeats, so a session lost overnight comes
@@ -143,6 +146,15 @@ pub enum ApiRequest {
     MadeForYou {
         generation: u64,
         force: bool,
+    },
+    /// The latest releases from the artists the account follows.
+    NewReleases {
+        generation: u64,
+    },
+    /// Every song of these releases, for the New releases page.
+    NewReleaseTracks {
+        albums: Vec<Album>,
+        generation: u64,
     },
     MyPlaylists {
         offset: u32,
@@ -341,6 +353,8 @@ impl ApiRequest {
                 | Self::TopArtists { .. }
                 | Self::Recommendations { .. }
                 | Self::MadeForYou { .. }
+                | Self::NewReleases { .. }
+                | Self::NewReleaseTracks { .. }
                 | Self::MyPlaylists { .. }
                 | Self::PlaylistSample { .. }
                 | Self::Contains { .. }
@@ -384,6 +398,15 @@ pub enum ApiResponse {
         generation: u64,
         personalized: bool,
         result: ApiResult<Vec<Playlist>>,
+        top_mixes: ApiResult<Vec<Playlist>>,
+    },
+    NewReleases {
+        generation: u64,
+        result: ApiResult<Vec<Album>>,
+    },
+    NewReleaseTracks {
+        generation: u64,
+        result: ApiResult<Vec<Track>>,
     },
     MyPlaylists {
         offset: u32,
@@ -1623,6 +1646,7 @@ struct Worker {
     http: Http,
     api: Arc<ApiGateway>,
     made_for_you: Arc<crate::made_for_you::MadeForYou>,
+    new_releases: Arc<crate::new_releases::NewReleases>,
     connect: Arc<crate::sonos::Controller>,
     background_session: Arc<tokio::sync::Semaphore>,
     art: ArtLoader,
@@ -1716,6 +1740,7 @@ impl Worker {
             web_client_id,
             api,
             made_for_you: Arc::new(crate::made_for_you::MadeForYou::new(http.clone())),
+            new_releases: Arc::new(crate::new_releases::NewReleases::new(http.clone())),
             connect: Arc::default(),
             background_session: Arc::new(tokio::sync::Semaphore::new(4)),
             http,
@@ -2064,6 +2089,13 @@ impl Worker {
                     if generation != *self.session.borrow() {
                         continue;
                     }
+                    if matches!(
+                        response.as_ref(),
+                        ApiResponse::NewReleases { .. } | ApiResponse::NewReleaseTracks { .. }
+                    ) && (home_account.is_none() || home_account != self.api.account())
+                    {
+                        continue;
+                    }
                     // Home can finish after a browser reauthorization without
                     // an explicit sign-out. Bind successful cards to both the
                     // account and the grants that existed at dispatch.
@@ -2124,11 +2156,12 @@ impl Worker {
                         _ => {}
                     }
                     if let ApiResponse::MadeForYou {
-                        result: Ok(playlists),
-                        ..
+                        result, top_mixes, ..
                     } = response.as_ref()
                     {
-                        self.api.observe_playlists(playlists);
+                        for playlists in [result, top_mixes].into_iter().flatten() {
+                            self.api.observe_playlists(playlists);
+                        }
                     }
                     self.emit(Event::Api(response));
                 }
@@ -3033,6 +3066,7 @@ impl Worker {
         self.signed_in = false;
         self.rootlist_pending = false;
         self.made_for_you = Arc::new(crate::made_for_you::MadeForYou::new(self.http.clone()));
+        self.new_releases = Arc::new(crate::new_releases::NewReleases::new(self.http.clone()));
         self.session.send_modify(|generation| *generation += 1);
         self.connect = Arc::default();
         self.authorization_attempt += 1;
@@ -4222,7 +4256,13 @@ impl Worker {
     fn dispatch(&self, request: ApiRequest) -> tokio::task::AbortHandle {
         let api = Arc::clone(&self.api);
         let made_for_you = Arc::clone(&self.made_for_you);
-        let home_account = if matches!(request, ApiRequest::MadeForYou { .. }) {
+        let new_releases = Arc::clone(&self.new_releases);
+        let home_account = if matches!(
+            request,
+            ApiRequest::MadeForYou { .. }
+                | ApiRequest::NewReleases { .. }
+                | ApiRequest::NewReleaseTracks { .. }
+        ) {
             api.account()
         } else {
             None
@@ -4239,7 +4279,7 @@ impl Worker {
             let (response, expired) = tokio::select! {
                 _ = session.changed() => return,
                 result = async {
-                    handle(&api, &made_for_you, &connect, engine.as_deref(), &background_session, request).await
+                    handle(&api, &made_for_you, &new_releases, &connect, engine.as_deref(), &background_session, request).await
                 } => result,
             };
             // Apply completion on the command loop. A late response cannot
@@ -4344,6 +4384,8 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
         ApiRequest::MadeForYou { .. } | ApiRequest::SearchPlaylists { .. } => {
             Operation::PlaylistSearch
         }
+        ApiRequest::NewReleases { .. } => Operation::UserData,
+        ApiRequest::NewReleaseTracks { .. } => Operation::Catalog,
         ApiRequest::SearchCatalogue { .. } => Operation::CatalogSearch,
         ApiRequest::Search { .. } => Operation::PlaylistSearch,
         ApiRequest::PlaySearch { kind, .. } if kind == "playlist" => Operation::PlaylistSearch,
@@ -4385,9 +4427,12 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
 fn observe_playlists(api: &ApiGateway, response: &ApiResponse) {
     match response {
         ApiResponse::MadeForYou {
-            result: Ok(playlists),
-            ..
-        } => api.observe_playlists(playlists),
+            result, top_mixes, ..
+        } => {
+            for playlists in [result, top_mixes].into_iter().flatten() {
+                api.observe_playlists(playlists);
+            }
+        }
         ApiResponse::MyPlaylists {
             result: Ok(page), ..
         } => api.observe_playlists(&page.items),
@@ -4448,6 +4493,169 @@ const UNSUPPORTED_DJ_URI: &str = "spotify:playlist:37i9dQZF1EYkqdzj48dyYq";
 
 /// Search is an approximation, used only when Spotify's personalized Home
 /// section cannot be read.
+/// Releases from Spotify's own new-releases feed over the playback session,
+/// or, when that cannot answer, from the Web API's followed artists.
+async fn read_new_releases(
+    api: &ApiGateway,
+    new_releases: &crate::new_releases::NewReleases,
+    engine: Option<&Engine>,
+    background_session: &tokio::sync::Semaphore,
+) -> ApiResult<Vec<Album>> {
+    if let Some(engine) = engine {
+        let _permit = background_session.acquire().await.ok();
+        match new_releases.feed(engine.session()).await {
+            Ok(albums) => {
+                log::debug!("Spotify route operation=NewReleases source=session");
+                return Ok(albums);
+            }
+            Err(error) => {
+                log::warn!("New releases session read failed; asking the Web API: {error}");
+            }
+        }
+    }
+    let account = api.account().map(|account| account.as_str().to_owned());
+    if let Some(account) = &account
+        && let Some(albums) = new_releases.cached_fallback(account).await
+    {
+        return Ok(albums);
+    }
+    let albums = followed_artist_releases(api).await?;
+    if let Some(account) = &account {
+        new_releases.keep_fallback(account, &albums).await;
+    }
+    log::debug!("Spotify route operation=NewReleases source=web-api");
+    Ok(albums)
+}
+
+/// The latest albums and singles of the first followed artists, merged.
+async fn followed_artist_releases(api: &ApiGateway) -> ApiResult<Vec<Album>> {
+    let client = api.client_for(Operation::UserData).await?;
+    let mut artists = Vec::new();
+    let mut after: Option<String> = None;
+    while artists.len() < crate::new_releases::FALLBACK_ARTISTS {
+        let page = client.followed_artists(after.as_deref(), 50).await?;
+        let next = page.cursors.and_then(|cursors| cursors.after);
+        let empty = page.items.is_empty();
+        artists.extend(page.items);
+        match next {
+            Some(next) if !empty => after = Some(next),
+            _ => break,
+        }
+    }
+    artists.truncate(crate::new_releases::FALLBACK_ARTISTS);
+    let catalog = api.client_for(Operation::Catalog).await?;
+    let _permit = catalog.background_permit().await;
+    let mut reads = tokio::task::JoinSet::new();
+    for artist in artists {
+        let catalog = Arc::clone(&catalog);
+        reads.spawn(async move {
+            catalog
+                .artist_albums(&artist.id, "album,single", 0, NEW_RELEASES_PER_ARTIST)
+                .await
+        });
+    }
+    let mut pages = Vec::new();
+    let mut failure = None;
+    while let Some(joined) = reads.join_next().await {
+        let Ok(result) = joined else {
+            continue;
+        };
+        match result {
+            Ok(page) => pages.push(page.items),
+            // One artist gone answers alone; a rate limit, quota or lost
+            // sign-in would answer the same for every artist left.
+            Err(error) => {
+                let stop = !matches!(error, ApiError::Status { .. } | ApiError::Decode(_));
+                failure.get_or_insert(error);
+                if stop {
+                    reads.abort_all();
+                    break;
+                }
+            }
+        }
+    }
+    match failure {
+        Some(error) if pages.is_empty() => Err(error),
+        _ => Ok(crate::new_releases::merge_artist_releases(pages)),
+    }
+}
+
+/// The songs of the releases on the New releases page, over the playback
+/// session when it can answer, otherwise album by album from the Web API.
+async fn read_new_release_tracks(
+    api: &ApiGateway,
+    engine: Option<&Engine>,
+    background_session: &tokio::sync::Semaphore,
+    albums: &[Album],
+) -> ApiResult<Vec<Track>> {
+    if let Some(engine) = engine {
+        let _permit = background_session.acquire().await.ok();
+        match session_reads::album_tracks(engine.session(), albums).await {
+            Ok(tracks) => return Ok(tracks),
+            Err(session_reads::Failure::Definitive(error)) => return Err(error),
+            Err(session_reads::Failure::Retry(error)) => {
+                log::debug!("new release songs session read failed: {error}; asking the Web API");
+            }
+        }
+    }
+    let catalog = api.client_for(Operation::Catalog).await?;
+    let _permit = catalog.background_permit().await;
+    let mut reads = tokio::task::JoinSet::new();
+    for (index, album) in albums.iter().cloned().enumerate() {
+        let catalog = Arc::clone(&catalog);
+        reads.spawn(async move {
+            let result = async {
+                let mut tracks = Vec::new();
+                let mut offset = 0;
+                loop {
+                    let page = catalog.album_tracks(&album.id, offset, 50).await?;
+                    let next = page.next_offset();
+                    tracks.extend(page.items);
+                    match next {
+                        Some(next) if next > offset => offset = next,
+                        _ => break,
+                    }
+                }
+                Ok::<_, ApiError>(tracks)
+            }
+            .await;
+            (index, album, result)
+        });
+    }
+    let mut answers = Vec::new();
+    let mut failure = None;
+    while let Some(joined) = reads.join_next().await {
+        let Ok((index, album, result)) = joined else {
+            continue;
+        };
+        match result {
+            Ok(tracks) => answers.push((index, album, tracks)),
+            Err(error) => {
+                let stop = !matches!(error, ApiError::Status { .. } | ApiError::Decode(_));
+                failure.get_or_insert(error);
+                if stop {
+                    reads.abort_all();
+                    break;
+                }
+            }
+        }
+    }
+    answers.sort_by_key(|(index, ..)| *index);
+    let tracks: Vec<Track> = answers
+        .into_iter()
+        .flat_map(|(_, album, tracks)| {
+            tracks.into_iter().map(move |mut track| {
+                track.album = Some(album.clone());
+                track
+            })
+        })
+        .collect();
+    match failure {
+        Some(error) if tracks.is_empty() => Err(error),
+        _ => Ok(tracks),
+    }
+}
+
 async fn shared_made_for_you(api: &ApiGateway) -> ApiResult<Vec<Playlist>> {
     let client = api.client_for(Operation::PlaylistSearch).await?;
     let _background_permit = client.background_permit().await;
@@ -4514,13 +4722,14 @@ where
 async fn handle(
     api: &ApiGateway,
     made_for_you: &crate::made_for_you::MadeForYou,
+    new_releases: &crate::new_releases::NewReleases,
     connect: &crate::sonos::Controller,
     engine: Option<&Engine>,
     background_session: &tokio::sync::Semaphore,
     request: ApiRequest,
 ) -> (ApiResponse, Vec<ApiSource>) {
     if let ApiRequest::MadeForYou { generation, force } = request {
-        let session_result = match engine
+        let shelves = match engine
             .filter(|engine| same_account(&engine.session().username(), api.account().as_ref()))
         {
             Some(engine) => {
@@ -4537,6 +4746,15 @@ async fn handle(
                 message: "The playback session is unavailable for Made for you.".into(),
             }),
         };
+        let (session_result, top_mixes) = match shelves {
+            Ok(shelves) => {
+                if let Err(error) = &shelves.top_mixes {
+                    log::warn!("Your top mixes session read failed: {error}");
+                }
+                (Ok(shelves.made_for_you), shelves.top_mixes)
+            }
+            Err(error) => (Err(error.clone()), Err(error)),
+        };
         let (result, personalized, expired) =
             with_shared_made_for_you_fallback(session_result, || async {
                 shared_made_for_you(api).await
@@ -4547,7 +4765,37 @@ async fn handle(
                 generation,
                 personalized,
                 result,
+                top_mixes,
             },
+            expired,
+        );
+    }
+    let session_engine =
+        engine.filter(|engine| same_account(&engine.session().username(), api.account().as_ref()));
+    if let ApiRequest::NewReleases { generation } = request {
+        let mut expired = Vec::new();
+        let result =
+            match read_new_releases(api, new_releases, session_engine, background_session).await {
+                Err(ApiError::SignInExpired { api_source }) => {
+                    expired.push(api_source);
+                    Err(ApiError::SignInExpired { api_source })
+                }
+                result => result,
+            };
+        return (ApiResponse::NewReleases { generation, result }, expired);
+    }
+    if let ApiRequest::NewReleaseTracks { albums, generation } = request {
+        let mut expired = Vec::new();
+        let result =
+            match read_new_release_tracks(api, session_engine, background_session, &albums).await {
+                Err(ApiError::SignInExpired { api_source }) => {
+                    expired.push(api_source);
+                    Err(ApiError::SignInExpired { api_source })
+                }
+                result => result,
+            };
+        return (
+            ApiResponse::NewReleaseTracks { generation, result },
             expired,
         );
     }
@@ -4647,7 +4895,9 @@ async fn handle(
             generation,
             result: routed!(recommendations(&seed_tracks, &seed_artists, 20)),
         },
-        ApiRequest::MadeForYou { .. } => unreachable!("handled before Web API routing"),
+        ApiRequest::MadeForYou { .. }
+        | ApiRequest::NewReleases { .. }
+        | ApiRequest::NewReleaseTracks { .. } => unreachable!("handled before Web API routing"),
         ApiRequest::MyPlaylists { offset, generation } => ApiResponse::MyPlaylists {
             offset,
             generation,
@@ -7203,6 +7453,7 @@ mod authorization_tests {
                     generation: 1,
                     personalized: false,
                     result: Ok(Vec::new()),
+                    top_mixes: Err(ApiError::RateLimited),
                 }),
                 expired: vec![ApiSource::Personal],
                 shared_lease: worker.credentials.lease(CredentialSlot::Shared),
@@ -7218,6 +7469,47 @@ mod authorization_tests {
             event, Event::Api(response) if matches!(response.as_ref(),
                 ApiResponse::MadeForYou { personalized: false, result: Ok(_), .. })
         )));
+    }
+
+    #[test]
+    fn release_answers_do_not_cross_account_reauthorization() {
+        for tracks in [false, true] {
+            let (runtime, mut worker, events) = worker("late-releases-reauthorization");
+            let _entered = runtime.enter();
+            worker
+                .api
+                .install(ApiSource::Shared, AccountId::new("bob"))
+                .unwrap();
+            let response = if tracks {
+                ApiResponse::NewReleaseTracks {
+                    generation: 1,
+                    result: Ok(Vec::new()),
+                }
+            } else {
+                ApiResponse::NewReleases {
+                    generation: 1,
+                    result: Ok(Vec::new()),
+                }
+            };
+            let (commands, receiver) = mpsc::unbounded_channel();
+            commands
+                .send(Command::ApiFinished {
+                    generation: *worker.session.borrow(),
+                    home_account: Some(AccountId::new("alice")),
+                    response: Box::new(response),
+                    expired: Vec::new(),
+                    shared_lease: worker.credentials.lease(CredentialSlot::Shared),
+                    personal_lease: worker.credentials.lease(CredentialSlot::Personal),
+                })
+                .unwrap();
+            commands.send(Command::Shutdown).unwrap();
+            runtime.block_on(worker.run(receiver));
+            assert!(
+                !events
+                    .try_iter()
+                    .any(|event| matches!(event, Event::Api(_)))
+            );
+        }
     }
 
     /// A Home answer cannot cross account replacement or grant renewal without sign-out.
@@ -7253,6 +7545,7 @@ mod authorization_tests {
                             id: "old-account".into(),
                             ..Default::default()
                         }]),
+                        top_mixes: Ok(Vec::new()),
                     }),
                     expired: Vec::new(),
                     shared_lease,
@@ -7267,6 +7560,51 @@ mod authorization_tests {
                     .all(|event| !matches!(event, Event::Api(_)))
             );
         }
+    }
+
+    /// Top mixes open like Made for you cards once a Home answer names their owner.
+    #[test]
+    fn home_answers_record_top_mix_ownership() {
+        let (runtime, mut worker, events) = worker("home-top-mixes-access");
+        let _entered = runtime.enter();
+        worker
+            .api
+            .install(ApiSource::Shared, AccountId::new("alice"))
+            .unwrap();
+        let mix = Playlist {
+            id: "mix".into(),
+            owner: Owner {
+                id: Some("spotify".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let (commands, receiver) = mpsc::unbounded_channel();
+        commands
+            .send(Command::ApiFinished {
+                generation: *worker.session.borrow(),
+                home_account: Some(AccountId::new("alice")),
+                response: Box::new(ApiResponse::MadeForYou {
+                    generation: 1,
+                    personalized: true,
+                    result: Ok(Vec::new()),
+                    top_mixes: Ok(vec![mix]),
+                }),
+                expired: Vec::new(),
+                shared_lease: worker.credentials.lease(CredentialSlot::Shared),
+                personal_lease: worker.credentials.lease(CredentialSlot::Personal),
+            })
+            .unwrap();
+        commands.send(Command::Shutdown).unwrap();
+        runtime.block_on(worker.run(receiver));
+        assert_eq!(
+            worker.api.playlist_access("mix"),
+            crate::api::PlaylistAccess::External
+        );
+        assert!(events.try_iter().any(|event| matches!(
+            event, Event::Api(response) if matches!(response.as_ref(),
+                ApiResponse::MadeForYou { top_mixes: Ok(mixes), .. } if mixes.len() == 1)
+        )));
     }
 
     pub(super) fn worker(
@@ -8161,6 +8499,7 @@ mod session_tests {
             handle(
                 &api,
                 &crate::made_for_you::MadeForYou::new(crate::http::Http::default()),
+                &crate::new_releases::NewReleases::new(crate::http::Http::default()),
                 &crate::sonos::Controller::default(),
                 None,
                 &background_session,

@@ -86,6 +86,11 @@ not consume a queue row or restore an older queue saved on this computer.
    durations. If Spotify permanently rejects an addition, only the rejected
    song and any unsent remainder of its album disappear; accepted songs stay.
 
+   **Play next** puts a song or selected songs at the front of the manual
+   queue, in displayed order, without interrupting the current song. It is
+   enabled only for playback on this computer, where the queue can be
+   reordered. A change to another device while the menu is open cancels it.
+
 3. **When a song starts, its row leaves the queue.** It doesn't matter
    how it started: the song before it ended, you pressed Next, you
    clicked its queue row, or another device skipped to it. Only that

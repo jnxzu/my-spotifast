@@ -3361,3 +3361,53 @@ msgstr ""
 
 #~ msgid "Reduce lyrics motion"
 #~ msgstr "Reducir movimiento de la letra"
+
+#: src/ui/home.rs:392 src/ui/new_releases.rs:25
+msgid "New releases"
+msgstr "Novedades"
+
+#: src/ui/new_releases.rs:59
+msgid "No new releases"
+msgstr "No hay novedades"
+
+#: src/ui/new_releases.rs:34
+msgid "The latest releases from artists you follow, newest first."
+msgstr ""
+"Los últimos lanzamientos de los artistas que sigues, primero los más "
+"recientes."
+
+#: src/ui/new_releases.rs:62
+msgid "New albums and singles from artists you follow will appear here."
+msgstr ""
+"Aquí aparecerán los nuevos álbumes y sencillos de los artistas que sigues."
+
+#: src/ui/widgets.rs:712 src/ui/widgets.rs:970
+msgid "Play next"
+msgstr "Reproducir a continuación"
+
+#: src/ui/home.rs:371
+msgid "Your top mixes"
+msgstr "Tus mixes más escuchados"
+
+#: src/ui/collection.rs:120
+msgid "Enlarge cover"
+msgstr "Ampliar portada"
+
+#: src/ui/settings.rs:82
+msgid "Preset name"
+msgstr "Nombre del preajuste"
+
+#. Translators: a search keyword for saving equalizer presets.
+#: src/ui/settings.rs:97 src/ui/settings.rs:2056
+msgid "Save preset"
+msgstr "Guardar preajuste"
+
+#. Translators: {name} is the name of an equalizer preset the user saved.
+#: src/ui/settings.rs:114
+#, rust-format
+msgid "Delete “{name}”"
+msgstr "Eliminar “{name}”"
+
+#: src/app.rs
+msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
+msgstr "Carga primero la lista completa. Las canciones repetidas deben eliminarse en Spotify."

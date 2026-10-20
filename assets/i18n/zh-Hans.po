@@ -3246,3 +3246,50 @@ msgstr ""
 
 #~ msgid "Reduce lyrics motion"
 #~ msgstr "减少歌词动画"
+
+#: src/ui/home.rs:392 src/ui/new_releases.rs:25
+msgid "New releases"
+msgstr "新发行"
+
+#: src/ui/new_releases.rs:59
+msgid "No new releases"
+msgstr "没有新发行"
+
+#: src/ui/new_releases.rs:34
+msgid "The latest releases from artists you follow, newest first."
+msgstr "你关注的艺人的最新发行，最新的在前。"
+
+#: src/ui/new_releases.rs:62
+msgid "New albums and singles from artists you follow will appear here."
+msgstr "你关注的艺人的新专辑和单曲会显示在这里。"
+
+#: src/ui/widgets.rs:712 src/ui/widgets.rs:970
+msgid "Play next"
+msgstr "接下来播放"
+
+#: src/ui/home.rs:371
+msgid "Your top mixes"
+msgstr "你的热门合辑"
+
+#: src/ui/collection.rs:120
+msgid "Enlarge cover"
+msgstr "放大封面"
+
+#: src/ui/settings.rs:82
+msgid "Preset name"
+msgstr "预设名称"
+
+#. Translators: a search keyword for saving equalizer presets.
+#: src/ui/settings.rs:97 src/ui/settings.rs:2056
+msgid "Save preset"
+msgstr "保存预设"
+
+#. Translators: {name} is the name of an equalizer preset the user saved.
+#: src/ui/settings.rs:114
+#, rust-format
+msgid "Delete “{name}”"
+msgstr "删除“{name}”"
+
+#: src/app.rs
+msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
+msgstr "请先加载完整的播放列表。重复的歌曲必须在Spotify中移除。"

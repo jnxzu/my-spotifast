@@ -3374,3 +3374,51 @@ msgstr ""
 
 #~ msgid "Spotify does not let apps remove one queued song."
 #~ msgstr "Spotify не дозволяє застосункам видаляти з черги окрему пісню."
+
+#: src/ui/home.rs:392 src/ui/new_releases.rs:25
+msgid "New releases"
+msgstr "Новинки"
+
+#: src/ui/new_releases.rs:59
+msgid "No new releases"
+msgstr "Новинок немає"
+
+#: src/ui/new_releases.rs:34
+msgid "The latest releases from artists you follow, newest first."
+msgstr "Найновіші релізи виконавців, на яких ви підписані, спершу нові."
+
+#: src/ui/new_releases.rs:62
+msgid "New albums and singles from artists you follow will appear here."
+msgstr ""
+"Тут з’являться нові альбоми та сингли виконавців, на яких ви підписані."
+
+#: src/ui/widgets.rs:712 src/ui/widgets.rs:970
+msgid "Play next"
+msgstr "Відтворити далі"
+
+#: src/ui/home.rs:371
+msgid "Your top mixes"
+msgstr "Ваші топ-мікси"
+
+#: src/ui/collection.rs:120
+msgid "Enlarge cover"
+msgstr "Збільшити обкладинку"
+
+#: src/ui/settings.rs:82
+msgid "Preset name"
+msgstr "Назва пресета"
+
+#. Translators: a search keyword for saving equalizer presets.
+#: src/ui/settings.rs:97 src/ui/settings.rs:2056
+msgid "Save preset"
+msgstr "Зберегти пресет"
+
+#. Translators: {name} is the name of an equalizer preset the user saved.
+#: src/ui/settings.rs:114
+#, rust-format
+msgid "Delete “{name}”"
+msgstr "Видалити «{name}»"
+
+#: src/app.rs
+msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
+msgstr "Спочатку завантажте весь плейліст. Повторювані треки потрібно видаляти у Spotify."
