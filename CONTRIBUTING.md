@@ -118,9 +118,9 @@ Do not add a setting (a new field in `Settings`, a toggle, a slider, a choice
 of options) without the maintainer's approval in the issue first. The answer is
 usually no: prefer a good default that serves everyone, or a keyboard shortcut
 or command for the people who want something else. A pull request that adds a
-setting without that approval will be asked to remove it. CI fails when a pull
-request adds a field to a `Settings` struct in `src/settings.rs`, until the
-maintainer adds the `setting-approved` label.
+setting without that approval will be asked to remove it. For settings changes,
+run `python .github/scripts/check-new-settings.py --base origin/main`; the
+maintainer's approval is still required.
 
 ### Visual reviews
 
@@ -164,40 +164,31 @@ ask again only if the resulting scope goes beyond what was approved or requested
 
 ### Checks
 
-Run the same checks CI runs before submitting:
+This personal fork runs one Windows x64 CI job with the default feature set:
 
 ```sh
-python3 .github/scripts/check-dependency-sources.py
-python3 .github/scripts/check-review-evidence.py
-python3 .github/scripts/check-new-settings.py --base origin/main
-python3 packaging/test-launchers.py
+python .github/scripts/check-dependency-sources.py
+python .github/scripts/check-review-evidence.py
 cargo fmt --all --check
 cargo clippy --locked --all-targets -- -D warnings
-cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo test --locked --all-targets
-cargo test --locked --all-targets --all-features
-cargo test --locked --all-features --doc
-RUSTDOCFLAGS='-D warnings' cargo doc --locked --all-features --no-deps
-(cd docs && bundle exec jekyll build)
+cargo build --locked
 ```
 
-Linux needs the development packages listed under
-[Build from source](https://spotifast.rocks/getting-started/#build-from-source); `nix develop`
-provides the complete development environment. The command compatibility test
-also needs `dbus-run-session`, to use a private bus instead of the desktop's.
-MilkDrop builds libprojectM
-from source, so every platform also needs CMake, a C++ compiler, and
-libclang (on Windows, vcpkg with `glew:x64-windows-static` installed and
-`VCPKG_INSTALLATION_ROOT` pointing at it); `--no-default-features` leaves
-MilkDrop out and needs none of that. CI repeats the test suite on Linux,
-macOS, and Windows. Passing CI is required, but does not replace review
-for correctness, product fit, maintainability, or security.
+The job uploads the Windows executable. CI does not run a platform matrix,
+all-feature duplicates, documentation builds, Nix builds, or installer tests.
+The existing tests remain available for focused checks when their code changes.
+
+MilkDrop builds libprojectM from source. Windows needs CMake, a C++ compiler,
+libclang, and vcpkg with `glew:x64-windows-static` installed and
+`VCPKG_INSTALLATION_ROOT` pointing at it. `--no-default-features` leaves MilkDrop
+out. Use the MSVC developer shell when building on Windows.
 
 Credential-storage changes also need a native store round trip. With the
 desktop keyring unlocked, run
 `cargo test --locked --lib credentials::tests::native_store_round_trip -- --ignored --exact`.
-It uses temporary dummy grants and deletes them afterward. CI runs this check
-on macOS and Windows; Linux requires an available Secret Service provider.
+It uses temporary dummy grants and deletes them afterward. This is a manual check;
+Linux requires an available Secret Service provider.
 The ordinary test suite uses an isolated fake store and never reads a real
 Spotify grant. Demo mode also skips credential restoration.
 
@@ -220,8 +211,8 @@ redeploying; the previous hostname keeps working until that switch. Renamed
 guides use `jekyll-redirect-from` to preserve their old URLs.
 
 When changing `Cargo.lock` or `flake.nix`, also verify `nix build .#default`
-on a Nix host or wait for the Nix CI job. A package-version-only lockfile
-change can change the vendor hash. Releases must wait for all required CI
+on a Nix host. The simplified CI does not build Nix packages. A package-version-only
+lockfile change can change the vendor hash. Releases must wait for all required CI
 jobs on the version commit before the tag is pushed.
 
 By contributing, you agree that your contribution is licensed under the
