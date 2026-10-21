@@ -164,6 +164,13 @@ jobs:
           $headers = & dumpbin /headers target\debug\spotifast.exe | Out-String
           if ($headers -notmatch $machine) { throw "spotifast.exe is not built for $env:RUNNER_ARCH`:`n$headers" }
 
+      - name: Local source updater regressions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File packaging/windows/test-local-updater.ps1 -InstalledExecutable "$PWD\target\debug\spotifast.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Windows app artifact
         if: runner.os == 'Windows' && runner.arch == 'X64'
         uses: actions/upload-artifact@v6

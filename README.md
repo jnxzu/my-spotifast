@@ -1,6 +1,6 @@
 # Spotifast J
 
-The current source version is 0.14.0.
+The current source version is 0.14.1.
 
 Connection status and reconnect controls live in the top bar. Spotify quota
 exhaustion pauses requests through the affected API identity until **Try again**
@@ -48,6 +48,14 @@ pins remain visible when Spotify rate limits library requests.
 Pins are separate from Spotify's pins. The fork retains Spotifast's existing
 settings and protected sign-in storage. Updates target this fork's releases,
 never the upstream app; until fork releases are published, install local builds.
+
+This workstation's Start menu shortcut and Spotify links use the local-source
+launcher. It compares the checkout's package version with the installed app.
+Only a higher version triggers a release build and verified replacement;
+equal or older versions launch immediately. It does not fetch or pull the
+repository. Failed builds keep the installed copy, with diagnostics in the
+source updater's local build log. An already running app is left running.
+The local setup disables automatic GitHub release checks for this installation.
 
 The upstream documentation below describes features shared with Spotifast.
 
