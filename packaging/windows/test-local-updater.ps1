@@ -45,6 +45,8 @@ try {
     Assert-Equal ((Get-Content -LiteralPath (Join-Path $root 'build.log') -Raw) -match 'Normal native build progress') $true 'Native stderr must be captured in the build log'
     Assert-Equal (Test-Path -LiteralPath $marker) $true 'A higher version must invoke the builder'
     Assert-Equal (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash $hash 'Failed builds must preserve the installed bytes'
+    Assert-Equal (Test-Path -LiteralPath $candidate) $false 'Build artifacts must be removed after failure'
+    Copy-Item -LiteralPath $InstalledExecutable -Destination $candidate
     (Get-Content -LiteralPath $build -Raw).Replace('exit 17','exit 0') | Set-Content -LiteralPath $build -Encoding UTF8
     $wrong = Invoke-LocalSourceUpdate -Configuration $configuration
     Assert-Equal $wrong.Result 'KeptInstalled' 'Wrong-version artifacts must be refused'
@@ -60,7 +62,36 @@ try {
     'version = "999.0.0"' | Set-Content -LiteralPath (Join-Path $repo 'Cargo.toml') -Encoding UTF8
     $invalid = Invoke-LocalSourceUpdate -Configuration $configuration
     Assert-Equal $invalid.Result 'KeptInstalled' 'Missing [package] must be refused'
-    Write-Output 'Passed: lower, equal, higher check, build failure, successful native stderr, stale output, version race, invalid manifest; installed bytes preserved.'
+    # Disposable programs provide real, distinct --version replies.
+    $oldStub = Join-Path $root 'old-stub.exe'
+    $newStub = Join-Path $root 'new-stub.exe'
+    Add-Type -TypeDefinition 'public class OldStub { public static void Main() { System.Console.WriteLine("spotifast 0.0.1"); } }' -OutputAssembly $oldStub -OutputType ConsoleApplication
+    Add-Type -TypeDefinition 'public class NewStub { public static void Main() { System.Console.WriteLine("spotifast 0.0.2"); } }' -OutputAssembly $newStub -OutputType ConsoleApplication
+    $repoExe = Join-Path $repo 'spotifast.exe'
+    Copy-Item -LiteralPath $oldStub -Destination $repoExe
+    $readme = Join-Path $repo 'README.md'
+    Set-Content -LiteralPath $readme -Value 'source readme must stay unchanged' -Encoding UTF8
+    $readmeHash = (Get-FileHash -LiteralPath $readme -Algorithm SHA256).Hash
+    @{RepositoryRoot=$repo;Executable=$repoExe;PowerShell=(Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe');BuildScript=$build;RegistryKey=$null} |
+        ConvertTo-Json | Set-Content -LiteralPath $configuration -Encoding UTF8
+    $builder = @(
+        'param($Configuration)',
+        '$cfg = Get-Content -Raw -LiteralPath $Configuration | ConvertFrom-Json',
+        '$release = Join-Path $cfg.RepositoryRoot "target\local-install\release"',
+        'New-Item -ItemType Directory -Path (Join-Path $release "deps") -Force | Out-Null',
+        'Copy-Item -LiteralPath (Join-Path (Split-Path $cfg.RepositoryRoot) "new-stub.exe") -Destination (Join-Path $release "spotifast.exe")',
+        'Copy-Item -LiteralPath (Join-Path (Split-Path $cfg.RepositoryRoot) "new-stub.exe") -Destination (Join-Path $release "deps\spotifast.exe")'
+    ) -join "`r`n"
+    Set-Content -LiteralPath $build -Value $builder -Encoding UTF8
+    Write-Manifest ([version]'0.0.2')
+    $updated = Invoke-LocalSourceUpdate -Configuration $configuration
+    Assert-Equal $updated.Result 'Updated' 'A repo-root installation must update successfully'
+    Assert-Equal (Get-InstalledVersion $repoExe) ([version]'0.0.2') 'The repository executable must be replaced'
+    Assert-Equal (Get-FileHash -LiteralPath $readme -Algorithm SHA256).Hash $readmeHash 'The source README must not be copied onto itself'
+    Assert-Equal (Test-Path -LiteralPath $candidate) $false 'The build executable must be removed'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path (Split-Path $candidate) 'deps\spotifast.exe')) $false 'The dependency build executable must be removed'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $root 'previous\spotifast.rollback')) $false 'The temporary rollback copy must be removed after success'
+    Write-Output 'Passed: version decisions, failures, stale output, version race, and repository-root update with rollback and cleanup.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($root)
     if (-not $resolved.StartsWith([IO.Path]::GetFullPath($prefix), [StringComparison]::OrdinalIgnoreCase)) {

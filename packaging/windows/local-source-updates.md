@@ -17,21 +17,25 @@ prerequisites leave the installed copy usable and are reported in the build log.
 A per-installation mutex combines simultaneous launches. If the app is already
 running, an available update waits for a later launch. A successful build must
 report the requested version, and the manifest must still have that version.
-The launcher verifies copied bytes, replaces the executable atomically, updates
-the existing Windows version record and keeps the previous executable for
-rollback. Failed builds and stale output leave the installed copy available.
+The launcher verifies copied bytes and replaces the executable atomically.
+It keeps the previous executable only until the replacement is verified, so
+failed replacement can be rolled back. Successful and failed builds remove
+their temporary Spotifast executables afterward. Failed builds and stale
+output leave the installed copy available.
 
 `install-local-updater.ps1` consumes a machine-local JSON configuration with the
 repository, executable, Windows PowerShell, build script, Visual Studio and Rust
 environment paths. It saves that configuration under LocalAppData, backs up
 changed shortcuts and protocol commands, and preserves the application icon.
 Only shortcuts and protocol commands already pointing to this installed copy
-are changed. Setup disables its automatic GitHub update checks; other
-preferences and protected sign-ins are untouched. The VBScript bootstrap hides
+are changed. The repository-root installation does not update the legacy
+Windows uninstall record, which still refers to the former installation. Setup
+disables its automatic GitHub update checks; other preferences and protected
+sign-ins are untouched. The VBScript bootstrap hides
 the build console and falls back to the installed app if the checkout is absent.
 
 The state directory contains `update.log`, the last `build.log`, previous
-installation files and original shortcut/protocol backups. No build command,
+diagnostic files and original shortcut/protocol backups. No build command,
 compiler path or machine-specific path belongs in the committed app settings.
 Direct command-line use of `spotifast.exe` remains available.
 

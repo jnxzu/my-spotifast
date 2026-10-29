@@ -28,6 +28,9 @@ function Invoke-LocalSourceUpdate([string]$Configuration, [switch]$CheckOnly) {
     $result = [ordered]@{ Result = 'KeptInstalled'; InstalledVersion = $null; RepositoryVersion = $null; Error = $null }
     $log = Join-Path $state 'update.log'
     $staged = "$executable.local-update"
+    $candidate = Join-Path $config.RepositoryRoot 'target\local-install\release\spotifast.exe'
+    $candidateDeps = Join-Path $config.RepositoryRoot 'target\local-install\release\deps\spotifast.exe'
+    $buildAttempted = $false
     function Write-UpdateLog([string]$Message) {
         Add-Content -LiteralPath $log -Value ("{0:o} {1}" -f (Get-Date), $Message) -Encoding UTF8
     }
@@ -64,6 +67,7 @@ function Invoke-LocalSourceUpdate([string]$Configuration, [switch]$CheckOnly) {
         $process = New-Object Diagnostics.Process
         $process.StartInfo = $start
         try {
+            $buildAttempted = $true
             if (-not $process.Start()) { throw 'Could not start the local build.' }
             $stdout = $process.StandardOutput.ReadToEndAsync()
             $stderr = $process.StandardError.ReadToEndAsync()
@@ -77,7 +81,6 @@ function Invoke-LocalSourceUpdate([string]$Configuration, [switch]$CheckOnly) {
         if ((Get-RepositoryVersion $config.RepositoryRoot) -ne $repository) {
             throw 'Repository version changed during the build; keeping the installed copy.'
         }
-        $candidate = Join-Path $config.RepositoryRoot 'target\local-install\release\spotifast.exe'
         if ((Get-InstalledVersion $candidate) -ne $repository) { throw 'Build output has the wrong version.' }
         $hash = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash
         $running = @(Get-CimInstance Win32_Process -Filter "name='spotifast.exe'" |
@@ -88,10 +91,13 @@ function Invoke-LocalSourceUpdate([string]$Configuration, [switch]$CheckOnly) {
         }
         $backupRoot = Join-Path $state 'previous'
         New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-        $backup = Join-Path $backupRoot 'spotifast.exe'
+        $backup = Join-Path $backupRoot 'spotifast.rollback'
         $readme = Join-Path (Split-Path $executable) 'README.md'
         $oldReadme = Join-Path $backupRoot 'README.md'
-        if (Test-Path -LiteralPath $readme) { Copy-Item -LiteralPath $readme -Destination $oldReadme -Force }
+        $newReadme = Join-Path $config.RepositoryRoot 'README.md'
+        $copyReadme = -not [string]::Equals([IO.Path]::GetFullPath($readme), [IO.Path]::GetFullPath($newReadme), [StringComparison]::OrdinalIgnoreCase)
+        $hadReadme = $copyReadme -and (Test-Path -LiteralPath $readme)
+        if ($hadReadme) { Copy-Item -LiteralPath $readme -Destination $oldReadme -Force }
         $metadata = $null
         if ($config.RegistryKey) {
             $metadata = Get-ItemProperty -LiteralPath $config.RegistryKey
@@ -113,12 +119,13 @@ function Invoke-LocalSourceUpdate([string]$Configuration, [switch]$CheckOnly) {
                 Set-ItemProperty -LiteralPath $config.RegistryKey -Name DisplayVersion -Value $repository.ToString()
                 Set-ItemProperty -LiteralPath $config.RegistryKey -Name DisplayName -Value "Spotifast J $repository"
             }
-            $newReadme = Join-Path $config.RepositoryRoot 'README.md'
-            if (Test-Path -LiteralPath $newReadme) { Copy-Item -LiteralPath $newReadme -Destination $readme -Force }
+            if ($copyReadme -and (Test-Path -LiteralPath $newReadme)) { Copy-Item -LiteralPath $newReadme -Destination $readme -Force }
         } catch {
             Copy-Item -LiteralPath $backup -Destination $staged -Force
-            [IO.File]::Replace($staged, $executable, (Join-Path $backupRoot 'failed.exe'))
-            if (Test-Path -LiteralPath $oldReadme) { Copy-Item -LiteralPath $oldReadme -Destination $readme -Force }
+            $failed = Join-Path $backupRoot 'failed.rollback'
+            [IO.File]::Replace($staged, $executable, $failed)
+            Remove-Item -LiteralPath $failed, $backup -Force -ErrorAction SilentlyContinue
+            if ($hadReadme) { Copy-Item -LiteralPath $oldReadme -Destination $readme -Force }
             if ($metadata) {
                 Set-ItemProperty -LiteralPath $config.RegistryKey -Name DisplayVersion -Value $metadata.DisplayVersion
                 Set-ItemProperty -LiteralPath $config.RegistryKey -Name DisplayName -Value $metadata.DisplayName
@@ -127,12 +134,22 @@ function Invoke-LocalSourceUpdate([string]$Configuration, [switch]$CheckOnly) {
         }
         $result.Result = 'Updated'
         $result.InstalledVersion = $repository.ToString()
+        try { Remove-Item -LiteralPath $backup -Force -ErrorAction Stop }
+        catch { Write-UpdateLog "Could not remove temporary rollback copy: $($_.Exception.Message)" }
         Write-UpdateLog "Installed and verified $repository ($hash)."
     } catch {
         $result.Error = $_.Exception.Message
         Write-UpdateLog $result.Error
     } finally {
         if (Test-Path -LiteralPath $staged) { Remove-Item -LiteralPath $staged -Force }
+        if ($buildAttempted) {
+            foreach ($artifact in @($candidate, $candidateDeps)) {
+                if (Test-Path -LiteralPath $artifact) {
+                    try { Remove-Item -LiteralPath $artifact -Force -ErrorAction Stop }
+                    catch { Write-UpdateLog "Could not remove build executable $artifact`: $($_.Exception.Message)" }
+                }
+            }
+        }
     }
     return [pscustomobject]$result
 }
