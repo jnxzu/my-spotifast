@@ -13,3 +13,8 @@ docs/.bundle/
 /.cache/
 
 /dist/
+
+# The workstation installation is built locally, not committed.
+/spotifast.exe
+/spotifast.exe.previous
+/spotifast.exe.local-update

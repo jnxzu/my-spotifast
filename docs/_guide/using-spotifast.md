@@ -26,6 +26,12 @@ occurrence. Load the full playlist before removing songs. Repeated songs must
 be removed in Spotify: the current dependency cannot safely delete just one
 occurrence. Unconfirmed cached rows and pending edits also block removal.
 
+## Your top songs
+
+Choose a period on Home or the Top Songs page to switch between roughly the
+last four weeks, six months, and several years of listening history. The
+selection applies to both views.
+
 ## Middle-click autoscroll
 
 On Windows, since 0.8.0, and on Linux once turned on, middle-click anywhere
@@ -193,6 +199,16 @@ default order, where the rows on screen match the order saved on Spotify.
 Right-clicking the playing song in the player bar offers the same removal
 while it plays from a playlist you can edit.
 
+## Play counts
+
+Album pages and an artist’s popular songs show Spotify play counts when the
+playback session can load them and there is room for the column.
+
+## Release dates
+
+Hover over the year on an album, single or EP page to see its release date.
+When Spotify only knows the year, the tooltip shows that year.
+
 ## Refreshing a playlist
 
 Since 0.8.0, choose **Refresh** in a playlist's **…** menu to reload
@@ -259,8 +275,11 @@ this playlist**. On macOS, both `Delete` and `Fn+Delete` work. Text fields,
 dialogs and open menus keep Delete from acting on the list.
 
 Press and hold the player bar's volume slider to update local volume without
-moving the pointer. Remote volume is sent on release. The seek slider previews
-on press and seeks on release.
+moving the pointer. Remote volume is sent on release and keeps your chosen
+level while Spotify updates, including during rate limits. Fresh updates
+can confirm the level or show a change made on another device. If the volume
+request fails, an error appears and the slider returns to the reported level.
+The seek slider previews on press and seeks on release.
 
 The default local output smooths volume and mute changes over 30 ms. Explicit
 track changes and play/pause/stop use nominal 50 ms fades. Stopping can shorten
@@ -293,6 +312,8 @@ Winamp skins do not yet have equivalent accessibility coverage.
 | `Ctrl+F` or `/` | Search |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Alt+←` / `Alt+→` | Back or forward |
+| `Page Up` / `Page Down` | Scroll the main page one page |
+| `Home` / `End` | Top or bottom of the main page |
 | `Ctrl+H` / `Ctrl+L` | Home / Liked Songs |
 | `Ctrl+Shift+A` / `Ctrl+Shift+B` | Playing artist / album |
 | `Ctrl+A` | Select every song in a playlist, album or Liked Songs |
@@ -306,6 +327,11 @@ Winamp skins do not yet have equivalent accessibility coverage.
 
 On macOS, `Cmd` replaces `Ctrl`. A focused text field keeps its usual keys
 for its own text.
+
+Repeat cycles through off, the whole list, and one song. As in Spotify's own
+apps, choosing another song while one song repeats (Next, Previous, or playing
+a song) turns Repeat One back into repeating the whole list. Previous that
+restarts the song keeps it repeating.
 
 ## Controlling it from the command line
 

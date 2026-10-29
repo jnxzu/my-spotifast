@@ -15,8 +15,8 @@ use tokio::sync::{mpsc, watch};
 
 use crate::api::models::*;
 use crate::api::{
-    AccountId, ApiError, ApiGateway, ApiSource, NetActivity, Operation, PlayRequest, PlaylistId,
-    SessionState, TokenProvider, WebTokens,
+    AccountId, ApiClient, ApiError, ApiGateway, ApiSource, NetActivity, Operation, PlayRequest,
+    PlaylistId, SessionState, TokenProvider, WebTokens,
 };
 use crate::credentials::{
     Grant as StoredGrant, Lease as CredentialLease, Slot as CredentialSlot,
@@ -24,7 +24,7 @@ use crate::credentials::{
 };
 use crate::http::Http;
 use crate::images::{ArtLoader, accent_color};
-use crate::model::PlaylistCache;
+use crate::model::{PlaylistCache, TopPeriod};
 use crate::paths::AppDirs;
 use crate::player::{
     Engine, EngineConfig, EngineEvent, Heard, LocalState, PlaybackResume, PlayerCommand,
@@ -99,7 +99,10 @@ pub enum RemoteAction {
     Next,
     Previous,
     Seek,
-    Volume,
+    /// Echo the adjustment's serial so late replies cannot settle a newer one.
+    Volume {
+        request: u64,
+    },
     Shuffle,
     Repeat,
 }
@@ -131,6 +134,7 @@ pub enum ApiRequest {
         limit: u32,
     },
     TopTracks {
+        period: TopPeriod,
         offset: u32,
         full: bool,
         generation: u64,
@@ -381,6 +385,7 @@ pub enum ApiResponse {
         result: ApiResult<CursorPage<PlayHistory>>,
     },
     TopTracks {
+        period: TopPeriod,
         offset: u32,
         full: bool,
         generation: u64,
@@ -778,6 +783,9 @@ pub enum Command {
     },
     /// Resolve user ids to display names through the streaming session.
     UserNames(Vec<String>),
+    /// Read Spotify's play counts for an album's songs or an artist's
+    /// popular songs, by the album's or the artist's URI.
+    PlayCounts(String),
     LoadLikedSongsCache {
         generation: u64,
     },
@@ -940,6 +948,12 @@ pub enum Event {
         name: Option<String>,
         image: Option<String>,
     },
+    /// Play counts by track URI for the album or artist `uri`, or why they
+    /// could not be read.
+    PlayCounts {
+        uri: String,
+        result: Result<std::collections::HashMap<String, u64>, String>,
+    },
     /// Saved shows that Spotify's metadata marks as audiobooks. librespot
     /// cannot play them, so the Podcasts shelf leaves them out.
     AudiobookShows(Vec<String>),
@@ -1049,6 +1063,8 @@ pub struct Backend {
     #[cfg(test)]
     home_cache_stores:
         std::sync::Mutex<Vec<crate::account_cache::Cache<crate::model::HomeSnapshot>>>,
+    #[cfg(test)]
+    top_tracks_requests: std::sync::Mutex<Vec<(TopPeriod, u32, bool, u64)>>,
 }
 
 impl Backend {
@@ -1145,6 +1161,8 @@ impl Backend {
             library_cache_stores: std::sync::Mutex::new(Vec::new()),
             #[cfg(test)]
             home_cache_stores: std::sync::Mutex::new(Vec::new()),
+            #[cfg(test)]
+            top_tracks_requests: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -1310,6 +1328,19 @@ impl Backend {
                     *generation,
                 ));
         }
+        #[cfg(test)]
+        if let ApiRequest::TopTracks {
+            period,
+            offset,
+            full,
+            generation,
+        } = &request
+        {
+            self.top_tracks_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((*period, *offset, *full, *generation));
+        }
         self.send(Command::Api(request));
     }
 
@@ -1342,6 +1373,16 @@ impl Backend {
         std::mem::take(
             &mut *self
                 .home_episode_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_top_tracks_requests(&self) -> Vec<(TopPeriod, u32, bool, u64)> {
+        std::mem::take(
+            &mut *self
+                .top_tracks_requests
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
         )
@@ -2126,7 +2167,17 @@ impl Worker {
                         self.forget_web_grant(source);
                         if source == ApiSource::Personal {
                             self.emit(Event::WebApp { client_id: None });
-                        } else {
+                        }
+                        // Either grant carries the session alone when the
+                        // other is gone; only losing the last one signs out.
+                        let other_ready = match source {
+                            ApiSource::Shared => self.api.personal_ready(),
+                            ApiSource::Personal => matches!(
+                                self.api.state(ApiSource::Shared),
+                                SessionState::Ready { .. }
+                            ),
+                        };
+                        if !other_ready {
                             self.signed_in = false;
                             self.emit(Event::Auth(AuthStatus::Failed(
                                 "Your Spotify sign-in expired. Please sign in again.".into(),
@@ -2376,6 +2427,7 @@ impl Worker {
                     }
                 }
                 Command::UserNames(ids) => self.fetch_user_names(ids),
+                Command::PlayCounts(uri) => self.fetch_play_counts(uri),
                 Command::LoadLikedSongsCache { generation } => {
                     if let Some(account) = self.api.account() {
                         let account_id = account.as_str().to_string();
@@ -2788,8 +2840,7 @@ impl Worker {
                 SessionState::Ready { .. }
             ),
         };
-        if !other_ready || source == ApiSource::Shared && !matches!(error, ApiError::QuotaExhausted)
-        {
+        if !other_ready {
             self.signed_in = false;
             self.emit(Event::Auth(AuthStatus::Failed(message.clone())));
         }
@@ -2919,8 +2970,15 @@ impl Worker {
         }
     }
 
+    /// The sign-in screen's button: with the personal app when one is set
+    /// up, which is how anyone signs in now that shared access takes no new
+    /// sign-ins.
     fn sign_in(&mut self) {
-        self.sign_in_source(ApiSource::Shared);
+        self.sign_in_source(if self.web_client_id.is_some() {
+            ApiSource::Personal
+        } else {
+            ApiSource::Shared
+        });
     }
 
     fn sign_in_source(&mut self, source: ApiSource) {
@@ -2934,6 +2992,9 @@ impl Worker {
         if self.cancel_signin.is_some() {
             return;
         }
+        // Signing in from the sign-in screen, rather than authorizing a
+        // personal app in Settings while already signed in.
+        let primary = !self.signed_in;
         let grant = match source {
             ApiSource::Shared => crate::auth::Grant::shared_web_api(),
             ApiSource::Personal => {
@@ -2952,7 +3013,7 @@ impl Worker {
         let listener = match crate::auth::listen_for_redirect(grant.redirect_port) {
             Ok(listener) => listener,
             Err(error) => {
-                if source == ApiSource::Shared {
+                if primary {
                     self.emit(Event::Auth(AuthStatus::Failed(error.to_string())));
                 } else {
                     self.emit(Event::Error(error.to_string()));
@@ -2970,7 +3031,7 @@ impl Worker {
         self.cancel_signin = Some(cancel_tx);
         self.authorizing_source = Some(source);
         self.api.set_state(source, SessionState::Authorizing);
-        if source == ApiSource::Shared {
+        if primary {
             self.emit(Event::Auth(AuthStatus::WaitingForBrowser {
                 url: flow.url.clone(),
             }));
@@ -3003,7 +3064,7 @@ impl Worker {
                     });
                 }
                 Err(error) => {
-                    if lease.current() && source == ApiSource::Shared {
+                    if lease.current() && primary {
                         let _ = events.send(Event::Auth(AuthStatus::SignedOut));
                     }
                     let message = error.to_string();
@@ -4218,6 +4279,44 @@ impl Worker {
         });
     }
 
+    /// Ask Spotify how often each song of an album or each of an artist's
+    /// popular songs was played. It needs the playback session and a
+    /// verified Web API grant, as upcoming album pages do; without them the
+    /// lists simply show no counts.
+    fn fetch_play_counts(&self, uri: String) {
+        let events = self.events.clone();
+        let waker = self.waker.clone();
+        let send = move |uri, result| {
+            let _ = events.send(Event::PlayCounts { uri, result });
+            waker.wake();
+        };
+        let Some(engine) = self.engine.clone() else {
+            return send(uri, Err("Play counts need playback enabled.".into()));
+        };
+        let Some(web) = self.api.prerelease_http_client() else {
+            return send(uri, Err("Play counts need a signed-in account.".into()));
+        };
+        let mut cancelled = self.session.subscribe();
+        tokio::spawn(async move {
+            let read = tokio::time::timeout(
+                Duration::from_secs(15),
+                session_reads::play_counts(engine.session(), &web, &uri),
+            );
+            let result = tokio::select! {
+                biased;
+                // A later visit asks again.
+                _ = cancelled.changed() => Err("The playback session ended.".to_string()),
+                result = read => result
+                    .map_err(|_| "Spotify took too long to answer.".to_string())
+                    .and_then(|result| result.map_err(|error| format!("{error:#}"))),
+            };
+            if let Err(error) = &result {
+                log::debug!("Play counts unavailable: {error}");
+            }
+            send(uri, result);
+        });
+    }
+
     // ---- api ----------------------------------------------------------------
 
     fn cancel_search(&mut self) {
@@ -4231,7 +4330,9 @@ impl Worker {
         if query.is_empty() {
             return;
         }
-        let split = self.api.personal_ready();
+        // Splitting moves playlists to shared access; without it, one request
+        // to the personal app asks for everything.
+        let split = self.api.personal_ready() && self.api.has_shared();
         self.emit(Event::Api(Box::new(ApiResponse::SearchStarted {
             query: query.clone(),
             serial,
@@ -4407,9 +4508,8 @@ fn operation_for(api: &ApiGateway, request: &ApiRequest) -> Operation {
             Operation::PlaylistMutation(api.playlist_access(playlist_id))
         }
         ApiRequest::ArtistTopTracks { .. } => Operation::ArtistTopTracks,
-        ApiRequest::Recommendations { .. } | ApiRequest::RelatedArtists { .. } => {
-            Operation::UnsupportedDevelopmentMode
-        }
+        ApiRequest::RelatedArtists { .. } => Operation::RelatedArtists,
+        ApiRequest::Recommendations { .. } => Operation::UnsupportedDevelopmentMode,
         ApiRequest::Artist { .. }
         | ApiRequest::ArtistAlbums { .. }
         | ApiRequest::Album { .. }
@@ -4813,7 +4913,8 @@ async fn handle(
             } else {
                 None
             };
-            over_session(engine, &request).await
+            let web = api.prerelease_http_client();
+            over_session(engine, web.as_deref(), &request).await
         };
         if let Some(response) = response {
             log::debug!("Spotify route operation={operation:?} source=session");
@@ -4874,11 +4975,17 @@ async fn handle(
             result: routed!(recently_played(limit, None, before.as_deref())),
         },
         ApiRequest::TopTracks {
+            period,
             offset,
             full,
             generation,
         } => ApiResponse::TopTracks {
-            result: routed!(top_tracks("short_term", if full { 50 } else { 20 }, offset)),
+            result: routed!(top_tracks(
+                period.as_spotify(),
+                if full { 50 } else { 20 },
+                offset
+            )),
+            period,
             offset,
             full,
             generation,
@@ -5235,7 +5342,7 @@ async fn handle(
                 RemoteAction::Next => routed!(next(device)),
                 RemoteAction::Previous => routed!(previous(device)),
                 RemoteAction::Seek => routed!(seek(position_ms, device)),
-                RemoteAction::Volume => routed!(set_volume(percent, device)),
+                RemoteAction::Volume { .. } => routed!(set_volume(percent, device)),
                 RemoteAction::Shuffle => routed!(set_shuffle(flag, device)),
                 RemoteAction::Repeat => routed!(set_repeat(&repeat, device)),
             };
@@ -5402,7 +5509,11 @@ const SESSION_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Answers a playlist or popular-track read over the streaming session. `None` when the
 /// session could not, leaving the request to the Web API.
-async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiResponse> {
+async fn over_session(
+    engine: &Engine,
+    web: Option<&ApiClient>,
+    request: &ApiRequest,
+) -> Option<ApiResponse> {
     let session = engine.session();
     let read = async {
         Some(match session_read(request)? {
@@ -5421,6 +5532,9 @@ async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiRespon
             SessionRead::ArtistTop { id } => SessionAnswer::ArtistTop(settle(
                 session_reads::artist_top_tracks(session, id).await,
             )?),
+            SessionRead::RelatedArtists { id } => SessionAnswer::RelatedArtists(settle(
+                session_reads::related_artists(session, web?, id).await,
+            )?),
         })
     };
     let Ok(answer) = tokio::time::timeout(SESSION_READ_TIMEOUT, read).await else {
@@ -5430,12 +5544,13 @@ async fn over_session(engine: &Engine, request: &ApiRequest) -> Option<ApiRespon
     session_response(request, answer?)
 }
 
-/// The read a request asks of the session: a playlist's header, a page of
-/// its rows, or a sample of who added them, which needs no song details.
+/// The read a request asks of the session: artist cards or popular tracks,
+/// a playlist's header, a page of rows, or a sample of who added them.
 /// Anything else, a duplicate check among them, is the Web API's even
 /// where the session serves the operation.
 #[derive(Debug, PartialEq)]
 enum SessionRead<'a> {
+    RelatedArtists { id: &'a str },
     Library,
     ArtistTop { id: &'a str },
     Header { id: &'a str },
@@ -5446,6 +5561,7 @@ enum SessionRead<'a> {
 fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
     Some(match request {
         ApiRequest::MyPlaylists { offset: 0, .. } => SessionRead::Library,
+        ApiRequest::RelatedArtists { id } => SessionRead::RelatedArtists { id },
         ApiRequest::ArtistTopTracks { id } => SessionRead::ArtistTop { id },
         ApiRequest::Playlist { id, .. } => SessionRead::Header { id },
         ApiRequest::PlaylistItems { id, offset, .. } => SessionRead::Rows {
@@ -5463,6 +5579,7 @@ fn session_read(request: &ApiRequest) -> Option<SessionRead<'_>> {
 /// What the session read: a playlist's header, or a page of its rows.
 enum SessionAnswer {
     Library(ApiResult<Vec<Playlist>>),
+    RelatedArtists(ApiResult<Vec<Artist>>),
     ArtistTop(ApiResult<Vec<Track>>),
     Header(Box<ApiResult<Playlist>>),
     Rows(ApiResult<Page<PlaylistItem>>),
@@ -5489,6 +5606,12 @@ fn session_response(request: &ApiRequest, answer: SessionAnswer) -> Option<ApiRe
                 next: None,
             }),
         },
+        (ApiRequest::RelatedArtists { id }, SessionAnswer::RelatedArtists(result)) => {
+            ApiResponse::RelatedArtists {
+                id: id.clone(),
+                result,
+            }
+        }
         (ApiRequest::ArtistTopTracks { id }, SessionAnswer::ArtistTop(result)) => {
             ApiResponse::ArtistTopTracks {
                 id: id.clone(),
@@ -7268,6 +7391,100 @@ mod authorization_tests {
     }
 
     #[test]
+    fn rejected_shared_verification_keeps_a_verified_personal_session() {
+        let (runtime, mut worker, events) = worker("verification-shared-keeps-personal");
+        runtime.block_on(async {
+            verify(&mut worker, ApiSource::Personal, "alice");
+            let _ = events.try_iter().collect::<Vec<_>>();
+            worker.on_web_verification_failed(
+                ApiSource::Shared,
+                ApiError::SignInExpired {
+                    api_source: ApiSource::Shared,
+                },
+            );
+            assert!(worker.signed_in);
+            assert!(worker.api.personal_ready());
+            assert!(
+                !events
+                    .try_iter()
+                    .any(|event| matches!(event, Event::Auth(AuthStatus::Failed(_))))
+            );
+        });
+    }
+
+    /// Spotify refusing the shared grant of a listener who also has a
+    /// personal app leaves them signed in with it; refusing the personal
+    /// app's grant too, the last one, signs them out.
+    #[test]
+    fn a_refused_shared_grant_leaves_the_personal_app_signed_in() {
+        let (runtime, mut worker, events) = worker("refused-shared-keeps-personal");
+        let _entered = runtime.enter();
+        verify(&mut worker, ApiSource::Shared, "alice");
+        verify(&mut worker, ApiSource::Personal, "alice");
+        let _ = events.try_iter().collect::<Vec<_>>();
+        let finished = |worker: &Worker, expired: ApiSource| Command::ApiFinished {
+            generation: *worker.session.borrow(),
+            home_account: None,
+            response: Box::new(ApiResponse::Me(Err(ApiError::SignInExpired {
+                api_source: expired,
+            }))),
+            expired: vec![expired],
+            shared_lease: worker.credentials.lease(CredentialSlot::Shared),
+            personal_lease: worker.credentials.lease(CredentialSlot::Personal),
+        };
+        let (commands, receiver) = mpsc::unbounded_channel();
+        commands.send(finished(&worker, ApiSource::Shared)).unwrap();
+        commands.send(Command::Shutdown).unwrap();
+        runtime.block_on(worker.run(receiver));
+        assert!(worker.signed_in);
+        assert!(!worker.api.has_shared());
+        assert!(worker.api.personal_ready());
+        assert!(
+            !events
+                .try_iter()
+                .any(|event| matches!(event, Event::Auth(AuthStatus::Failed(_))))
+        );
+
+        let (commands, receiver) = mpsc::unbounded_channel();
+        commands
+            .send(finished(&worker, ApiSource::Personal))
+            .unwrap();
+        commands.send(Command::Shutdown).unwrap();
+        runtime.block_on(worker.run(receiver));
+        assert!(!worker.signed_in);
+        assert!(
+            events
+                .try_iter()
+                .any(|event| matches!(event, Event::Auth(AuthStatus::Failed(_))))
+        );
+    }
+
+    /// With a personal app set up, the sign-in screen's button signs in
+    /// with it, and its problems show on that screen rather than as a toast
+    /// behind it. Shared access takes no new sign-ins.
+    #[test]
+    fn the_sign_in_screen_signs_in_with_the_personal_app() {
+        let (runtime, mut worker, events) = worker("sign-in-with-personal");
+        let _entered = runtime.enter();
+        let _occupied =
+            std::net::TcpListener::bind(("127.0.0.1", crate::auth::WEB_REDIRECT_PORT)).unwrap();
+        worker.sign_in();
+        let received: Vec<_> = events.try_iter().collect();
+        assert!(received.iter().any(|event| matches!(event,
+            Event::Auth(AuthStatus::Failed(message)) if message.contains("8989")
+        )));
+        assert!(
+            !received
+                .iter()
+                .any(|event| matches!(event, Event::Error(_)))
+        );
+        assert_eq!(
+            worker.api.state(ApiSource::Shared),
+            SessionState::Unavailable
+        );
+    }
+
+    #[test]
     fn old_api_and_verification_errors_cannot_sign_out_a_new_session() {
         let (runtime, mut worker, events) = worker("old-api-after-sign-in");
         let _entered = runtime.enter();
@@ -8516,6 +8733,41 @@ mod session_tests {
             }
         ));
         assert!(expired.is_empty());
+    }
+
+    /// Related artists are read over the session first, and a session error
+    /// keeps the Web API fallback.
+    #[test]
+    fn related_artists_can_bypass_the_shared_web_api() {
+        let api = ApiGateway::new(reqwest::Client::new(), Arc::new(NetActivity::default()));
+        let request = ApiRequest::RelatedArtists {
+            id: "artist1".into(),
+        };
+        assert!(
+            api.session_serves(operation_for(&api, &request)),
+            "a playback session must serve related artists before Shared quota"
+        );
+        assert!(
+            session_read(&request).is_some(),
+            "the eligible request needs a real session read"
+        );
+        assert_eq!(operation_for(&api, &request), Operation::RelatedArtists);
+        assert_eq!(
+            session_read(&request),
+            Some(SessionRead::RelatedArtists { id: "artist1" })
+        );
+        assert!(matches!(
+            session_response(&request, SessionAnswer::RelatedArtists(Ok(Vec::new()))),
+            Some(ApiResponse::RelatedArtists { id, result: Ok(artists) })
+                if id == "artist1" && artists.is_empty()
+        ));
+        assert!(
+            settle(Err::<Vec<Artist>, Failure>(Failure::Retry(
+                anyhow::anyhow!("private read unavailable")
+            )))
+            .is_none(),
+            "a transient session error must retain Web API fallback"
+        );
     }
 
     /// Popular-track responses retain artist identity and the existing fallback/error policy.

@@ -2947,9 +2947,9 @@ msgstr "大視窗"
 msgid "Song info"
 msgstr "歌曲資訊"
 
-#: src/ui/winamp/mod.rs:878
-msgid "Size: 2x, 3x, 4x"
-msgstr "大小：2x、3x、4x"
+#: src/ui/winamp/mod.rs
+msgid "Size: 1x, 2x, 3x, 4x"
+msgstr "大小：1x、2x、3x、4x"
 
 #: src/ui/winamp/mod.rs:897
 msgid "Visualisation"
@@ -3300,3 +3300,48 @@ msgstr "刪除「{name}」"
 #: src/app.rs
 msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
 msgstr "請先載入完整的播放清單。重複的歌曲必須在Spotify中移除。"
+
+#: src/model.rs
+msgid "Last 4 weeks"
+msgstr "最近 4 週"
+
+#: src/model.rs
+msgid "Last 6 months"
+msgstr "最近 6 個月"
+
+#: src/model.rs
+msgid "Past year"
+msgstr "過去一年"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 4 weeks."
+msgstr "根據你大約最近 4 週的收聽記錄計算。"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 6 months."
+msgstr "根據你大約最近 6 個月的收聽記錄計算。"
+
+#: src/model.rs
+msgid "Calculated from several years of listening history."
+msgstr "根據你多年的收聽記錄計算。"
+
+#: src/ui/login.rs
+msgid "Open Spotify's developer dashboard."
+msgstr "開啟 Spotify 開發人員資訊主頁。"
+
+#: src/ui/login.rs
+msgid "Click Create app. Any name will do."
+msgstr "按一下「Create app」。名稱不拘。"
+
+#: src/ui/login.rs
+msgid "Under Redirect URIs, add exactly:"
+msgstr "在「Redirect URIs」中準確新增："
+
+#: src/ui/login.rs
+msgid "Tick Web API, accept the terms, and save."
+msgstr "勾選「Web API」，接受條款並儲存。"
+
+#: src/ui/widgets.rs
+msgctxt "column heading"
+msgid "PLAYS"
+msgstr "播放次數"

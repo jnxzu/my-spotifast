@@ -3025,9 +3025,9 @@ msgstr "Stort fönster"
 msgid "Song info"
 msgstr "Låtinfo"
 
-#: src/ui/winamp/mod.rs:878
-msgid "Size: 2x, 3x, 4x"
-msgstr "Storlek: 2x, 3x, 4x"
+#: src/ui/winamp/mod.rs
+msgid "Size: 1x, 2x, 3x, 4x"
+msgstr "Storlek: 1x, 2x, 3x, 4x"
 
 #: src/ui/winamp/mod.rs:897
 msgid "Visualisation"
@@ -3386,3 +3386,48 @@ msgstr "Radera ”{name}”"
 #: src/app.rs
 msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
 msgstr "Läs in hela spellistan först. Låtar som förekommer flera gånger måste tas bort i Spotify."
+
+#: src/model.rs
+msgid "Last 4 weeks"
+msgstr "Senaste 4 veckorna"
+
+#: src/model.rs
+msgid "Last 6 months"
+msgstr "Senaste 6 månaderna"
+
+#: src/model.rs
+msgid "Past year"
+msgstr "Senaste året"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 4 weeks."
+msgstr "Beräknat utifrån din lyssning under ungefär de senaste 4 veckorna."
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 6 months."
+msgstr "Beräknat utifrån din lyssning under ungefär de senaste 6 månaderna."
+
+#: src/model.rs
+msgid "Calculated from several years of listening history."
+msgstr "Beräknat utifrån flera års lyssningshistorik."
+
+#: src/ui/login.rs
+msgid "Open Spotify's developer dashboard."
+msgstr "Öppna Spotifys utvecklarpanel."
+
+#: src/ui/login.rs
+msgid "Click Create app. Any name will do."
+msgstr "Klicka på ”Create app”. Vilket namn som helst fungerar."
+
+#: src/ui/login.rs
+msgid "Under Redirect URIs, add exactly:"
+msgstr "Under ”Redirect URIs” lägger du till exakt:"
+
+#: src/ui/login.rs
+msgid "Tick Web API, accept the terms, and save."
+msgstr "Kryssa i ”Web API”, godkänn villkoren och spara."
+
+#: src/ui/widgets.rs
+msgctxt "column heading"
+msgid "PLAYS"
+msgstr "SPELNINGAR"

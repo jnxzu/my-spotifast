@@ -174,6 +174,7 @@ pub fn page(app: &mut App, ui: &mut egui::Ui) {
             show_cover: true,
             show_added: false,
             show_added_by: false,
+            show_plays: false,
             page: Page::NewReleases,
             loading: false,
             error: None,

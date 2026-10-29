@@ -24,8 +24,8 @@ use protobuf::{EnumOrUnknown, Message as _};
 
 use crate::api::ApiError;
 use crate::api::models::{
-    Album, ArtistRef, Episode, Image, Owner, Page, PlayableItem, Playlist, PlaylistItem, Show,
-    Track, TrackCount, UserRef,
+    Album, Artist, ArtistRef, Episode, Image, Owner, Page, PlayableItem, Playlist, PlaylistItem,
+    Show, Track, TrackCount, UserRef,
 };
 
 /// The account's rootlist, page by page in Spotify's order: one request per
@@ -166,6 +166,87 @@ fn library_row(item: &Item, meta: &MetaItem) -> Option<Playlist> {
 
 const IMAGE_HOST: &str = "https://i.scdn.co/image/";
 
+/// Related artist cards from Spotify's session-backed Pathfinder request.
+pub async fn related_artists(
+    session: &Session,
+    web: &crate::api::ApiClient,
+    id: &str,
+) -> Result<Vec<Artist>, Failure> {
+    let login = session.login5().auth_token().await?;
+    let client_token = session.spclient().client_token().await?;
+    let query = serde_json::json!({
+        "operationName": "queryArtistRelated",
+        "variables": {"uri": format!("spotify:artist:{id}")},
+        "extensions": {"persistedQuery": {
+            "version": 1,
+            "sha256Hash": "3d031d6cb22a2aa7c8d203d49b49df731f58b1e2799cc38d9876d58771aa66f3"
+        }}
+    });
+    let body = web
+        .partner_request(&login.access_token, &client_token, &query)
+        .await
+        .map_err(|error| Failure::Retry(error.into()))?;
+    related_artist_headers(&body)
+}
+
+fn related_artist_headers(body: &serde_json::Value) -> Result<Vec<Artist>, Failure> {
+    let entries = body
+        .pointer("/data/artistUnion/relatedContent/relatedArtists/items")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            Failure::Retry(anyhow::anyhow!("Spotify related artists are unavailable"))
+        })?;
+    let mut found = Vec::new();
+    for data in entries {
+        let Some(uri) = data.get("uri").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Ok(SpotifyUri::Artist { id }) = SpotifyUri::from_uri(uri) else {
+            continue;
+        };
+        let id = id.to_base62();
+        let Some(name) = data
+            .pointer("/profile/name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+        else {
+            continue;
+        };
+        let images = data
+            .pointer("/visuals/avatarImage/sources")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|source| {
+                Some(Image {
+                    url: source.get("url")?.as_str()?.to_string(),
+                    width: source
+                        .get("width")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|size| u32::try_from(size).ok()),
+                    height: source
+                        .get("height")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|size| u32::try_from(size).ok()),
+                })
+            })
+            .collect();
+        found.push(Artist {
+            id,
+            uri: uri.to_string(),
+            name: name.to_string(),
+            images,
+            ..Default::default()
+        });
+    }
+    if !entries.is_empty() && found.is_empty() {
+        return Err(Failure::Retry(anyhow::anyhow!(
+            "Spotify related artist cards could not be decoded"
+        )));
+    }
+    Ok(found)
+}
+
 /// Popular tracks in the playback account's market, retaining Spotify's ranking.
 pub async fn artist_top_tracks(session: &Session, id: &str) -> Result<Vec<Track>, Failure> {
     use librespot_metadata::Metadata as _;
@@ -304,7 +385,7 @@ pub async fn prerelease(
         let query = serde_json::json!({
             "operationName":"getAlbum",
             "variables":{"uri":page.album.uri,"locale":"","offset":offset,"limit":50},
-            "extensions":{"persistedQuery":{"version":1,"sha256Hash":"b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10"}}
+            "extensions":{"persistedQuery":{"version":1,"sha256Hash":GET_ALBUM_HASH}}
         });
         let body = web
             .partner_request(&login.access_token, &client_token, &query)
@@ -342,6 +423,106 @@ fn collection_headers() -> reqwest::header::HeaderMap {
     headers.insert(reqwest::header::CONTENT_TYPE, value.clone());
     headers.insert(reqwest::header::ACCEPT, value);
     headers
+}
+
+/// Spotify's persisted Pathfinder query for an album page.
+const GET_ALBUM_HASH: &str = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
+/// Spotify's persisted Pathfinder query for an artist page's overview.
+const ARTIST_OVERVIEW_HASH: &str =
+    "4bc52527bb77a5f8bbb9afe491e9aa725698d29ab73bff58d49169ee29800167";
+/// Songs per album page, as Spotify's own album view asks for them.
+const PLAY_COUNT_PAGE: usize = 50;
+/// No album runs longer; a page that never ends stops here.
+const MAX_PLAY_COUNT_ROWS: usize = 1000;
+
+/// Spotify's play count for each song of an album, or of an artist's
+/// popular songs, by track URI. Only the Pathfinder queries Spotify's own
+/// apps make carry them: the Web API has none. A song Spotify gives no
+/// count is left out, and the caller shows nothing for it.
+pub async fn play_counts(
+    session: &Session,
+    web: &crate::api::ApiClient,
+    uri: &str,
+) -> anyhow::Result<HashMap<String, u64>> {
+    let login = session.login5().auth_token().await?;
+    let client_token = session.spclient().client_token().await?;
+    let mut counts = HashMap::new();
+    match crate::util::uri_kind(uri) {
+        Some("album") => {
+            let mut offset = 0;
+            loop {
+                let query = serde_json::json!({
+                    "operationName": "getAlbum",
+                    "variables": {
+                        "uri": uri, "locale": "", "offset": offset, "limit": PLAY_COUNT_PAGE
+                    },
+                    "extensions": {
+                        "persistedQuery": {"version": 1, "sha256Hash": GET_ALBUM_HASH}
+                    }
+                });
+                let body = web
+                    .partner_request(&login.access_token, &client_token, &query)
+                    .await?;
+                let page = body
+                    .pointer("/data/albumUnion/tracksV2")
+                    .ok_or_else(|| anyhow::anyhow!("Spotify answered without the album's songs"))?;
+                let rows = play_counts_from(page, &mut counts);
+                let total = page
+                    .get("totalCount")
+                    .and_then(|total| total.as_u64())
+                    .unwrap_or(0);
+                offset += rows;
+                if rows == 0 || offset as u64 >= total || offset >= MAX_PLAY_COUNT_ROWS {
+                    break;
+                }
+            }
+        }
+        Some("artist") => {
+            let query = serde_json::json!({
+                "operationName": "queryArtistOverview",
+                "variables": {"uri": uri, "locale": "", "includePrerelease": false},
+                "extensions": {
+                    "persistedQuery": {"version": 1, "sha256Hash": ARTIST_OVERVIEW_HASH}
+                }
+            });
+            let body = web
+                .partner_request(&login.access_token, &client_token, &query)
+                .await?;
+            let top = body
+                .pointer("/data/artistUnion/discography/topTracks")
+                .ok_or_else(|| anyhow::anyhow!("Spotify answered without the popular songs"))?;
+            play_counts_from(top, &mut counts);
+        }
+        _ => anyhow::bail!("Spotify counts plays only for album and artist songs"),
+    }
+    Ok(counts)
+}
+
+/// Adds the counts of a Pathfinder list of `{track: {uri, playcount}}`
+/// rows, and says how many rows it held. Spotify sends each count as a
+/// string of digits.
+fn play_counts_from(list: &serde_json::Value, counts: &mut HashMap<String, u64>) -> usize {
+    let rows = list
+        .get("items")
+        .and_then(|items| items.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for row in rows {
+        let Some(track) = row.get("track") else {
+            continue;
+        };
+        let uri = track.get("uri").and_then(|uri| uri.as_str());
+        let count = track.get("playcount").and_then(|count| match count {
+            serde_json::Value::String(text) => text.parse::<u64>().ok(),
+            other => other.as_u64(),
+        });
+        if let (Some(uri), Some(count)) = (uri, count)
+            && uri.starts_with("spotify:track:")
+        {
+            counts.insert(uri.to_string(), count);
+        }
+    }
+    rows.len()
 }
 
 /// Whether this account has already pre-saved the album resolved from the countdown page.
@@ -1074,6 +1255,34 @@ fn iso8601(timestamp_ms: i64) -> Option<String> {
 #[cfg(test)]
 mod tests {
 
+    /// Pathfinder's counts arrive as strings of digits; rows without a
+    /// track URI or a count are left out, and every row counts toward the
+    /// page's length.
+    #[test]
+    fn play_counts_read_pathfinder_rows() {
+        let list = serde_json::json!({"items": [
+            {"track": {"uri": "spotify:track:a", "playcount": "10808862"}},
+            {"track": {"uri": "spotify:track:b", "playcount": 7}},
+            {"track": {"uri": "spotify:track:c"}},
+            {"track": {"uri": "spotify:episode:d", "playcount": "3"}},
+            {"track": {"playcount": "5"}},
+            {"uid": "no track"},
+        ]});
+        let mut counts = HashMap::new();
+        assert_eq!(super::play_counts_from(&list, &mut counts), 6);
+        assert_eq!(
+            counts,
+            HashMap::from([
+                ("spotify:track:a".to_string(), 10_808_862),
+                ("spotify:track:b".to_string(), 7),
+            ])
+        );
+        assert_eq!(
+            super::play_counts_from(&serde_json::json!({}), &mut counts),
+            0
+        );
+    }
+
     /// A lost reply is uncertain, including when the server accepted the write.
     /// HTTP errors and redirect responses must never resend the mutation either.
     #[tokio::test]
@@ -1125,6 +1334,51 @@ mod tests {
     use librespot_metadata::Metadata as _;
 
     use super::*;
+
+    #[test]
+    fn related_artist_cards_keep_order_identity_and_images() {
+        let body = serde_json::json!({"data":{"artistUnion":{"relatedContent":{"relatedArtists":{"items":[
+            {"uri":"spotify:artist:0000000000000000000002", "profile":{"name":"Second artist"},
+             "visuals":{"avatarImage":{"sources":[{"url":"https://example.invalid/avatar.jpg","width":640,"height":640}]}}},
+            {"uri":"spotify:track:0000000000000000000003", "profile":{"name":"Not an artist"}},
+            {"uri":"spotify:artist:0000000000000000000001", "profile":{"name":"First artist"}}
+        ]}}}}});
+        let artists = related_artist_headers(&body).unwrap();
+        assert_eq!(
+            artists
+                .iter()
+                .map(|artist| artist.id.as_str())
+                .collect::<Vec<_>>(),
+            ["0000000000000000000002", "0000000000000000000001"]
+        );
+        assert_eq!(artists[0].uri, "spotify:artist:0000000000000000000002");
+        assert_eq!(artists[0].name, "Second artist");
+        assert_eq!(
+            artists[0].images[0].url,
+            "https://example.invalid/avatar.jpg"
+        );
+        assert_eq!(artists[0].images[0].width, Some(640));
+        assert_eq!(artists[0].images[0].height, Some(640));
+        assert!(artists[1].images.is_empty());
+    }
+
+    #[test]
+    fn related_artists_keep_explicit_empty_but_retry_unknown_payloads() {
+        let empty = serde_json::json!({"data":{"artistUnion":{"relatedContent":{"relatedArtists":{"items":[]}}}}});
+        assert!(related_artist_headers(&empty).unwrap().is_empty());
+        for body in [
+            serde_json::json!({}),
+            serde_json::json!({"data":{"artistUnion":{"relatedContent":{"relatedArtists":{"items":[
+                {"uri":"spotify:artist:0000000000000000000001"},
+                {"uri":"spotify:artist:0000000000000000000002", "profile":{"name":" "}}
+            ]}}}}}),
+        ] {
+            assert!(matches!(
+                related_artist_headers(&body),
+                Err(Failure::Retry(_))
+            ));
+        }
+    }
 
     const TRACK: &str = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
     const EPISODE: &str = "spotify:episode:7GhIk7Il098yCjg4BQjzvb";

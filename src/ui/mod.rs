@@ -78,8 +78,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             lyrics::side_panel(app, ui);
         }
         central(app, ui);
-        keep_room_for_panels(app, ctx);
     }
+    keep_room_for_panels(app, ctx);
     devices::popup(app, ctx);
     dialogs::show(app, ctx);
     update::show(app, ctx);
@@ -112,10 +112,11 @@ fn keep_room_for_panels(app: &App, ctx: &Context) {
     if crate::window::fixed_size() {
         return;
     }
+    let panels = app.lyrics_fullscreen.is_none();
     let width = main_min_width(
         topbar::least_width(ctx),
-        app.settings.sidebar_visible,
-        app.show_queue_panel || app.show_lyrics_panel,
+        panels && app.settings.sidebar_visible,
+        panels && (app.show_queue_panel || app.show_lyrics_panel),
     )
     .round();
     let id = Id::new("main-min-width");
@@ -320,6 +321,9 @@ fn central(app: &mut App, ui: &mut egui::Ui) {
                                 Page::Settings => settings::show(app, ui),
                             }
                         });
+                    if app.dialog.is_none() && !app.show_devices {
+                        keys::scroll_page(ui);
+                    }
                 },
             );
             ui.ctx()

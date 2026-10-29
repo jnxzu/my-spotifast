@@ -3053,9 +3053,9 @@ msgstr "Finestra grande"
 msgid "Song info"
 msgstr "Info sul brano"
 
-#: src/ui/winamp/mod.rs:878
-msgid "Size: 2x, 3x, 4x"
-msgstr "Dimensione: 2x, 3x, 4x"
+#: src/ui/winamp/mod.rs
+msgid "Size: 1x, 2x, 3x, 4x"
+msgstr "Dimensione: 1x, 2x, 3x, 4x"
 
 #: src/ui/winamp/mod.rs:897
 msgid "Visualisation"
@@ -3415,3 +3415,48 @@ msgstr "Elimina “{name}”"
 #: src/app.rs
 msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
 msgstr "Carica prima la playlist completa. I brani ripetuti devono essere rimossi in Spotify."
+
+#: src/model.rs
+msgid "Last 4 weeks"
+msgstr "Ultime 4 settimane"
+
+#: src/model.rs
+msgid "Last 6 months"
+msgstr "Ultimi 6 mesi"
+
+#: src/model.rs
+msgid "Past year"
+msgstr "Ultimo anno"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 4 weeks."
+msgstr "Calcolato dai tuoi ascolti delle ultime 4 settimane circa."
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 6 months."
+msgstr "Calcolato dai tuoi ascolti degli ultimi 6 mesi circa."
+
+#: src/model.rs
+msgid "Calculated from several years of listening history."
+msgstr "Calcolato da diversi anni di cronologia degli ascolti."
+
+#: src/ui/login.rs
+msgid "Open Spotify's developer dashboard."
+msgstr "Apri la dashboard per sviluppatori di Spotify."
+
+#: src/ui/login.rs
+msgid "Click Create app. Any name will do."
+msgstr "Fai clic su «Create app». Va bene qualsiasi nome."
+
+#: src/ui/login.rs
+msgid "Under Redirect URIs, add exactly:"
+msgstr "In «Redirect URIs», aggiungi esattamente:"
+
+#: src/ui/login.rs
+msgid "Tick Web API, accept the terms, and save."
+msgstr "Spunta «Web API», accetta i termini e salva."
+
+#: src/ui/widgets.rs
+msgctxt "column heading"
+msgid "PLAYS"
+msgstr "ASCOLTI"

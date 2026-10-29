@@ -15,6 +15,11 @@ edits wait for Spotify to confirm their snapshot. Liked Songs, Your Episodes,
 and other unsupported session features still use the Web API. Initial sign-in
 still needs a verified Web API grant for the same account.
 
+The sign-in card also offers **Set up personal app**. Create a Spotify
+application, register `http://127.0.0.1:8989/login` as its redirect URI,
+and authorize its Client ID. A saved personal app can sign in without a
+shared grant; an existing shared grant can continue to be used.
+
 Personal fork of [crmne/spotifast](https://github.com/crmne/spotifast).
 The repository and local project are named `my-spotifast`.
 
@@ -30,6 +35,9 @@ restart, and double-clicking a search song starts that song alone. A liked
 song's heart opens Add to playlist with an option to remove the like. Lyrics
 retry temporary rate limits, and Liked Songs reconciles songs re-liked on
 another device.
+
+On Home and the Top Songs page, choose a listening period to see your top
+songs from the last four weeks, six months, or longer-term history.
 
 Home's quick-access tiles follow recent listening, and **Your top mixes**
 joins Made for you using the same session cache and cooldown. Podcast pages
@@ -110,7 +118,7 @@ https://github.com/user-attachments/assets/a5f669ce-b3b7-4f8e-9933-976a78876c7e
 | Feature | What you can do |
 |---|---|
 | **Library and search** | Browse playlists, Liked Songs, albums, artists, and podcasts. Search the catalogue and edit playlists you own. |
-| **Spotify Connect** | Play on this computer or control playback on your other devices, including Google Cast speakers and groups. |
+| **Spotify Connect** | Play on this computer or control playback on your other devices, including Google Cast speakers and groups. Remote volume keeps your chosen level while Spotify updates. |
 | **Themes** | Choose light, dark, system appearance, or custom colours. On Omarchy, follow your desktop theme. |
 | **Desktop controls** | Use keyboard shortcuts and media keys. Keep music playing from the tray when supported by your desktop and settings. |
 | **Winamp mini player** | Use classic skins with an equalizer, playlist, and animated sound displays. |
@@ -145,6 +153,7 @@ and [How it connects](https://spotifast.rocks/how-it-connects/) for the details.
 A classic look for your music, with Winamp 2 `.wsz` skins, an equalizer,
 a playlist, and animated sound displays. Switch with **Ctrl+M**
 (**Cmd+Shift+M** on macOS), the shrink button, or Settings.
+The spectrum analyser and oscilloscope also work in the collapsed title bar.
 
 <p align="center">
   <img src="docs/assets/images/winamp.png" alt="Spotifast's Winamp mini player with the built-in skin, equalizer, and playlist" width="320">

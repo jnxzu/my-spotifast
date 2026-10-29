@@ -3,6 +3,8 @@
 `launch-local.ps1` is the startup boundary for this workstation's configured
 Spotifast J shortcuts and Spotify links. It reads `[package].version` from the
 local checkout and asks the installed executable for `--version`.
+On this workstation the installed executable is `spotifast.exe` at the
+repository root; Git ignores it.
 
 Only a strictly greater repository version runs a build. Equal and lower
 versions skip immediately, even if source files changed. The checkout is assumed

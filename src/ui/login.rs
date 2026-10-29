@@ -67,7 +67,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                     ui.add_space(6.0);
                     theme::text(ui, "Spotifast", theme::bold(30.0), palette.text);
                     theme::text(ui, gettext(locale, "A native Spotify client."), theme::regular(14.5), palette.secondary);
-                    ui.add_space(22.0);
+                    ui.add_space(if matches!(app.auth, AuthStatus::Failed(_)) { 2.0 } else { 22.0 });
                     match &app.auth {
                         _ if !app.backend.quota_exhausted_sources().is_empty() => {
                             theme::text(ui, gettext(locale, "Connection paused"), theme::medium(14.0), palette.text);
@@ -165,6 +165,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                             }
                         }
                     }
+                    if !connecting && matches!(app.auth, AuthStatus::SignedOut | AuthStatus::Failed(_))
+                        && app.backend.quota_exhausted_sources().is_empty()
+                    {
+                        personal_sign_in_setup(app, ui);
+                    }
                     let mut proxy_open = ui.data(|data| data.get_temp::<bool>(proxy_id)).unwrap_or(false);
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -199,6 +204,70 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, connecting: bool) {
                 palette.dim,
             );
         });
+}
+
+/// Offers a personal Spotify app without replacing the fork's compact sign-in card.
+fn personal_sign_in_setup(app: &mut App, ui: &mut egui::Ui) {
+    let locale = app.locale;
+    let palette = app.palette;
+    let open_id = egui::Id::new("login-personal-setup-open");
+    let input_id = egui::Id::new("login-personal-client-id");
+    let mut open = ui
+        .data(|data| data.get_temp::<bool>(open_id))
+        .unwrap_or(false);
+    if theme::link(
+        ui,
+        gettext(locale, "Set up personal app"),
+        theme::regular(13.0),
+        palette.secondary,
+    )
+    .clicked()
+    {
+        open = !open;
+    }
+    ui.data_mut(|data| data.insert_temp(open_id, open));
+    if !open {
+        return;
+    }
+    for instruction in [
+        "Open Spotify's developer dashboard.",
+        "Click Create app. Any name will do.",
+        "Under Redirect URIs, add exactly:",
+    ] {
+        ui.add(egui::Label::new(gettext(locale, instruction)).wrap());
+    }
+    ui.label("http://127.0.0.1:8989/login");
+    ui.add(egui::Label::new(gettext(locale, "Tick Web API, accept the terms, and save.")).wrap());
+    if theme::link(
+        ui,
+        "developer.spotify.com/dashboard",
+        theme::regular(13.0),
+        palette.secondary,
+    )
+    .clicked()
+    {
+        ui.ctx().open_url(egui::OpenUrl::new_tab(
+            "https://developer.spotify.com/dashboard",
+        ));
+    }
+    let mut client_id = ui
+        .data(|data| data.get_temp::<String>(input_id))
+        .unwrap_or_else(|| app.settings.web_client_id.clone().unwrap_or_default());
+    ui.add(
+        egui::TextEdit::singleline(&mut client_id)
+            .id(input_id)
+            .hint_text(gettext(locale, "Client ID")),
+    );
+    ui.data_mut(|data| data.insert_temp(input_id, client_id.clone()));
+    let client_id = client_id.trim();
+    let valid = client_id.len() == 32 && client_id.bytes().all(|byte| byte.is_ascii_alphanumeric());
+    ui.add_enabled_ui(valid, |ui| {
+        if theme::pill_button(ui, &palette, &gettext(locale, "Authorize"), true).clicked() {
+            app.settings.web_client_id = Some(client_id.to_string());
+            app.mark_settings_dirty();
+            app.actions.push(Action::ConfigurePersonalWebApp);
+        }
+    });
 }
 
 /// Detailed quota status inside the top-bar connection popup.
@@ -318,6 +387,96 @@ fn big_button(ui: &mut egui::Ui, app: &App, label: &str) -> bool {
 mod tests {
     use super::*;
     use crate::{app::AppOptions, backend::Waker, paths::AppDirs, settings::Settings};
+
+    #[test]
+    fn personal_setup_authorizes_only_a_complete_client_id() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        theme::install(&ctx);
+        let root =
+            std::env::temp_dir().join(format!("spotifast-login-personal-{}", std::process::id()));
+        let mut app = App::new(
+            &Waker::default(),
+            AppDirs {
+                config: root.join("config"),
+                state: root.join("state"),
+                cache: root.join("cache"),
+            },
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                restore_sign_in: false,
+                tray: false,
+            },
+        );
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("login-personal-setup-open"), true);
+            data.insert_temp(egui::Id::new("login-personal-client-id"), "bad".to_string());
+        });
+        let draw = |app: &mut App, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(760.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| personal_sign_in_setup(app, ui),
+            );
+            output.textures_delta.clear();
+            output.platform_output.accesskit_update.unwrap()
+        };
+        draw(&mut app, vec![]);
+        let tree = draw(&mut app, vec![]);
+        let button = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| {
+                node.label() == Some("Authorize") && node.role() == egui::accesskit::Role::Button
+            })
+            .unwrap();
+        let bounds = button.1.bounds().unwrap();
+        let pos = pos2(
+            (bounds.x0 + bounds.x1) as f32 / 2.0,
+            (bounds.y0 + bounds.y1) as f32 / 2.0,
+        );
+        let click = || {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        draw(&mut app, click());
+        assert!(app.actions.is_empty());
+        let client_id = "1234567890abcdef1234567890abcdef";
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("login-personal-client-id"),
+                client_id.to_string(),
+            )
+        });
+        draw(&mut app, vec![]);
+        draw(&mut app, click());
+        assert_eq!(app.settings.web_client_id.as_deref(), Some(client_id));
+        assert!(matches!(
+            app.actions.as_slice(),
+            [Action::ConfigurePersonalWebApp]
+        ));
+        app.backend.shutdown();
+    }
 
     #[test]
     fn quota_pause_replaces_the_spinner_and_offers_only_an_explicit_retry() {

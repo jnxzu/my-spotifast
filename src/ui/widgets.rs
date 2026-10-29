@@ -1286,6 +1286,9 @@ pub struct TrackRow<'a> {
     /// Who put the song here, on playlists made together.
     pub added_by: Option<&'a str>,
     pub show_added_by: bool,
+    /// Spotify's play count for the song, on album pages and an artist's
+    /// popular songs once the counts arrived.
+    pub show_plays: bool,
     pub compact: bool,
     /// One line for the name and the artists in a shorter row without the
     /// cover: the compact track list. `compact` stays the queue's narrow row.
@@ -1342,9 +1345,18 @@ struct Columns {
     album: f32,
     added_by: f32,
     added: f32,
+    plays: f32,
     heart: f32,
     duration: f32,
     more: f32,
+}
+
+/// The play count column's width, in rows and in the header alike.
+const PLAYS_WIDTH: f32 = 120.0;
+
+/// Whether a list `width` wide has room for play counts.
+fn plays_fit(width: f32) -> bool {
+    width > 560.0
 }
 
 fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
@@ -1370,6 +1382,11 @@ fn columns(width: f32, row: &TrackRow<'_>) -> Columns {
         },
         added: if row.added_at.is_some() && wide {
             120.0
+        } else {
+            0.0
+        },
+        plays: if row.show_plays && !row.compact && plays_fit(width) {
+            PLAYS_WIDTH
         } else {
             0.0
         },
@@ -1620,7 +1637,8 @@ fn track_row_contents(
         x += cols.cover;
     }
     let right_fixed = cols.heart + cols.duration + cols.more + 8.0;
-    let text_right = rect.right() - right_fixed - cols.added - cols.added_by - cols.album;
+    let text_right =
+        rect.right() - right_fixed - cols.plays - cols.added - cols.added_by - cols.album;
     let title_rect = Rect::from_min_max(
         pos2(x, rect.top()),
         pos2((text_right - 12.0).max(x), rect.bottom()),
@@ -1674,8 +1692,8 @@ fn track_row_contents(
                 if let Some(added) = row.added_at.filter(|a| !a.starts_with("1970-01-01"))
                     && cols.added == 0.0
                 {
-                    let label =
-                        util::format_relative_date(app.locale, added, jiff::Timestamp::now());
+                    let now = jiff::Timestamp::now();
+                    let label = util::format_relative_date(app.locale, added, now);
                     theme::text(
                         &mut child,
                         "•",
@@ -1683,7 +1701,7 @@ fn track_row_contents(
                         palette.secondary.gamma_multiply(0.6),
                     );
                     theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
-                    if label.ends_with(" ago") {
+                    if util::is_relative_date(added, now) {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
                     }
@@ -1720,10 +1738,10 @@ fn track_row_contents(
                         theme::regular(12.0),
                         palette.secondary.gamma_multiply(0.6),
                     );
-                    let label =
-                        util::format_relative_date(app.locale, added, jiff::Timestamp::now());
+                    let now = jiff::Timestamp::now();
+                    let label = util::format_relative_date(app.locale, added, now);
                     theme::text(&mut child, &label, theme::regular(12.0), palette.secondary);
-                    if label.ends_with(" ago") {
+                    if util::is_relative_date(added, now) {
                         ui.ctx()
                             .request_repaint_after(std::time::Duration::from_secs(1));
                     }
@@ -1768,10 +1786,10 @@ fn track_row_contents(
                             theme::regular(12.0),
                             palette.secondary.gamma_multiply(0.6),
                         );
-                        let label =
-                            util::format_relative_date(app.locale, added, jiff::Timestamp::now());
+                        let now = jiff::Timestamp::now();
+                        let label = util::format_relative_date(app.locale, added, now);
                         theme::text(ui, &label, theme::regular(12.0), palette.secondary);
-                        if label.ends_with(" ago") {
+                        if util::is_relative_date(added, now) {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
                         }
@@ -1799,10 +1817,10 @@ fn track_row_contents(
                             theme::regular(12.0),
                             palette.secondary.gamma_multiply(0.6),
                         );
-                        let label =
-                            util::format_relative_date(app.locale, added, jiff::Timestamp::now());
+                        let now = jiff::Timestamp::now();
+                        let label = util::format_relative_date(app.locale, added, now);
                         theme::text(ui, &label, theme::regular(12.0), palette.secondary);
-                        if label.ends_with(" ago") {
+                        if util::is_relative_date(added, now) {
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_secs(1));
                         }
@@ -1870,7 +1888,8 @@ fn track_row_contents(
             .filter(|added| !added.starts_with("1970-01-01"))
         {
             let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.added, row_height));
-            let label = util::format_relative_date(app.locale, added, jiff::Timestamp::now());
+            let now = jiff::Timestamp::now();
+            let label = util::format_relative_date(app.locale, added, now);
             painter.text(
                 pos2(cell.left(), cell.center().y),
                 egui::Align2::LEFT_CENTER,
@@ -1880,12 +1899,26 @@ fn track_row_contents(
             );
             // Relative labels cross a boundary while the table is idle, so
             // keep the visible value in step with the clock.
-            if label.ends_with(" ago") {
+            if util::is_relative_date(added, now) {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_secs(1));
             }
         }
         x += cols.added;
+    }
+    // Plays.
+    if cols.plays > 0.0 {
+        if let Some(plays) = app.play_counts.get(row.item.uri()) {
+            let cell = Rect::from_min_size(pos2(x, rect.top()), vec2(cols.plays, row_height));
+            painter.text(
+                pos2(cell.left(), cell.center().y),
+                egui::Align2::LEFT_CENTER,
+                util::format_count(*plays),
+                theme::regular(13.0),
+                palette.secondary,
+            );
+        }
+        x += cols.plays;
     }
 
     // Heart.
@@ -2184,6 +2217,7 @@ pub fn table_header(
     show_album: bool,
     show_added: bool,
     show_added_by: bool,
+    show_plays: bool,
     show_cover: bool,
     sort: Option<crate::model::TableSort>,
 ) -> Option<crate::model::SortColumn> {
@@ -2326,8 +2360,14 @@ pub fn table_header(
     } else {
         0.0
     };
+    let plays_width = if show_plays && plays_fit(width) {
+        PLAYS_WIDTH
+    } else {
+        0.0
+    };
     let right_fixed = 36.0 + 56.0 + 36.0 + 8.0;
-    let mut cx = rect.right() - right_fixed - added_width - added_by_width - album_width;
+    let mut cx =
+        rect.right() - right_fixed - plays_width - added_width - added_by_width - album_width;
     if album_width > 0.0 {
         heading(
             ui,
@@ -2352,6 +2392,17 @@ pub fn table_header(
             cx,
             &pgettext(locale, "column heading", "DATE ADDED"),
             SortColumn::Added,
+        );
+        cx += added_width;
+    }
+    // Spotify's own lists do not sort by plays, and neither does this one.
+    if plays_width > 0.0 {
+        ui.painter().text(
+            pos2(cx, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            pgettext(locale, "column heading", "PLAYS"),
+            font.clone(),
+            color,
         );
     }
     if number_clicked {
@@ -4094,6 +4145,7 @@ mod tests {
                                     added_at: None,
                                     added_by: None,
                                     show_added_by: false,
+                                    show_plays: false,
                                     compact: false,
                                     thin: false,
                                     shift: 0.0,

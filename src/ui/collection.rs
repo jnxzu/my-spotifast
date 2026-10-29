@@ -10,7 +10,7 @@ use crate::app::App;
 use crate::i18n::{Locale, gettext, ngettext};
 use crate::model::{
     Action, Dialog, DragTrack, Loadable, Page, PagedList, RowContext, RowPick, SortColumn,
-    TableItem, TableRowsCache, TableSort,
+    TableItem, TableRowsCache, TableSort, TopPeriod,
 };
 use crate::theme::{self, Icon, Palette};
 use crate::util;
@@ -30,6 +30,8 @@ pub(super) struct Hero<'a> {
     pub title: &'a str,
     pub description: Option<String>,
     pub byline: Vec<(String, Option<Page>)>,
+    /// A tooltip for the byline entry at an index
+    pub byline_tooltip: Option<(usize, String)>,
     /// The owner's picture, drawn before the byline's first entry. A hero
     /// without an owner, an album or an artist say, draws nothing.
     pub avatar: Option<Avatar>,
@@ -206,16 +208,21 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                     if index > 0 {
                         theme::text(ui, "•", theme::regular(13.5), palette.secondary);
                     }
-                    match page {
+                    let response = match page {
                         Some(page) => {
-                            if theme::link(ui, text, theme::semibold(13.5), palette.text).clicked()
-                            {
+                            let response =
+                                theme::link(ui, text, theme::semibold(13.5), palette.text);
+                            if response.clicked() {
                                 app.actions.push(Action::Open(page.clone()));
                             }
+                            response
                         }
-                        None => {
-                            theme::text(ui, text, theme::regular(13.5), palette.secondary);
-                        }
+                        None => theme::text(ui, text, theme::regular(13.5), palette.secondary),
+                    };
+                    if let Some((at, tooltip)) = &hero.byline_tooltip
+                        && *at == index
+                    {
+                        response.on_hover_text(tooltip);
                     }
                 }
             });
@@ -473,6 +480,8 @@ pub struct Table<'a> {
     pub show_cover: bool,
     pub show_added: bool,
     pub show_added_by: bool,
+    /// Spotify's play counts, which only album pages show.
+    pub show_plays: bool,
     pub page: Page,
     pub loading: bool,
     pub error: Option<&'a str>,
@@ -704,6 +713,7 @@ fn table_contents(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
             table.show_album,
             table.show_added,
             table.show_added_by,
+            table.show_plays,
             show_cover,
             sort,
         )
@@ -899,6 +909,7 @@ fn table_contents(app: &mut App, ui: &mut egui::Ui, table: Table<'_>) {
                 added_at: added_at.as_deref().filter(|_| table.show_added),
                 added_by: added_by.as_deref(),
                 show_added_by: table.show_added_by,
+                show_plays: table.show_plays,
                 compact: false,
                 thin,
                 shift,
@@ -1454,13 +1465,23 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     theme::text(
         ui,
-        gettext(
-            app.locale,
-            "Your most-played tracks from the last four weeks.",
-        ),
+        app.home.top_period.subtitle(app.locale),
         theme::regular(13.5),
         palette.secondary,
     );
+    ui.add_space(12.0);
+
+    let labels: Vec<_> = TopPeriod::ALL
+        .iter()
+        .map(|p| (*p, p.label(app.locale)))
+        .collect();
+    let options: Vec<(TopPeriod, &str)> = labels
+        .iter()
+        .map(|(period, label)| (*period, label.as_ref()))
+        .collect();
+    if let Some(period) = widgets::chips(ui, &palette, &options, app.home.top_period) {
+        app.actions.push(Action::SetTopPeriod(period));
+    }
     ui.add_space(18.0);
 
     let tracks = match &app.home.top_songs {
@@ -1505,6 +1526,7 @@ pub fn top_songs(app: &mut App, ui: &mut egui::Ui) {
             show_cover: true,
             show_added: false,
             show_added_by: false,
+            show_plays: false,
             page: Page::TopSongs,
             loading: app.home.top_songs_loading,
             error: None,
@@ -1694,6 +1716,7 @@ pub fn playlist(app: &mut App, ui: &mut egui::Ui, id: &str) {
                             .is_some_and(|a| !a.starts_with("1970-01-01"))
                     }),
                     show_added_by: made_together,
+                    show_plays: false,
                     page: Page::Playlist(id.to_string()),
                     loading: page.items.loading,
                     error: page.items.error.as_deref(),
@@ -1789,6 +1812,8 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                 );
                 return;
             }
+            app.request_play_counts(&album.uri);
+            let show_plays = app.has_play_counts(&album.uri);
             album_hero(app, ui, album, &page.tracks, preview.as_deref());
             let saved = app.is_saved(&album.uri).unwrap_or(false);
             let sort = app.table_sorts.get(&Page::Album(id.to_string())).copied();
@@ -1831,6 +1856,7 @@ pub fn album(app: &mut App, ui: &mut egui::Ui, id: &str) {
                     show_cover: false,
                     show_added: false,
                     show_added_by: false,
+                    show_plays,
                     page: Page::Album(id.to_string()),
                     loading: page.tracks.loading,
                     error: page.tracks.error.as_deref(),
@@ -1978,6 +2004,7 @@ fn playlist_hero<'a>(
             title: &playlist.name,
             description: playlist.description.as_deref().map(util::strip_html),
             byline,
+            byline_tooltip: None,
             avatar,
             round: false,
         },
@@ -2074,7 +2101,17 @@ fn album_hero(
         .iter()
         .map(|artist| (artist.name.clone(), artist.id.clone().map(Page::Artist)))
         .collect();
+    let mut byline_tooltip = None;
     if let Some(year) = album.year() {
+        // Populate tooltip: If we know the full release
+        // date, YYYY-MM-DD (10 chars/bytes), show formatted date,
+        // otherwise just show year.
+        let date = album
+            .release_date
+            .as_deref()
+            .filter(|date| date.len() >= 10)
+            .unwrap_or(year);
+        byline_tooltip = Some((byline.len(), util::format_date(app.locale, date)));
         byline.push((year.to_string(), None));
     }
     let count = album.total_tracks.unwrap_or(tracks.items.len() as u32);
@@ -2105,6 +2142,7 @@ fn album_hero(
             title: &album.name,
             description: None,
             byline,
+            byline_tooltip,
             avatar: None,
             round: false,
         },
@@ -2192,6 +2230,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             title: &liked_title,
             description: None,
             byline: vec![(user, None), (count_text, None)],
+            byline_tooltip: None,
             avatar: None,
             round: false,
         },
@@ -2239,11 +2278,11 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
         .collect::<Vec<_>>()
         .into();
     let context = match collection_uri {
-        Some(uri) if app.library.liked.is_complete() => RowContext::Context {
+        Some(uri) => RowContext::Context {
             uri,
             editable_playlist: None,
         },
-        _ => RowContext::Uris(uris),
+        None => RowContext::Uris(uris),
     };
     let loading = app.library.liked.loading;
     let error = app.library.liked.error.clone();
@@ -2261,6 +2300,7 @@ pub fn liked(app: &mut App, ui: &mut egui::Ui) {
             show_cover: true,
             show_added: true,
             show_added_by: false,
+            show_plays: false,
             page: Page::LikedSongs,
             loading,
             error: error.as_deref(),
@@ -2457,6 +2497,88 @@ mod tests {
         assert_eq!(owner_name(&app, &playlist), "Alice");
         playlist.owner.display_name = Some("Alice Smith".into());
         assert_eq!(owner_name(&app, &playlist), "Alice Smith");
+    }
+
+    /// Hovering an album's year, shows the whole date it
+    /// was released, or the year when Spotify knows no day.
+    #[test]
+    fn an_albums_year_shows_its_release_date_on_hover() {
+        fn texts(shape: &egui::epaint::Shape, found: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => found.push((
+                    text.galley.text().to_string(),
+                    text.pos + text.galley.rect.center().to_vec2(),
+                )),
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().for_each(|shape| texts(shape, found));
+                }
+                _ => {}
+            }
+        }
+        /// The text on screen while the pointer rests on the year.
+        fn hovering_the_year(release_date: &str) -> Vec<String> {
+            let mut app = test_app();
+            let single = Album {
+                name: "Lead Single".into(),
+                uri: "spotify:album:single".into(),
+                album_type: Some("single".into()),
+                release_date: Some(release_date.into()),
+                artists: vec![ArtistRef {
+                    name: "Artist".into(),
+                    ..Default::default()
+                }],
+                ..Album::default()
+            };
+            let tracks = PagedList::default();
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            ctx.global_style_mut(|style| style.interaction.tooltip_delay = 0.0);
+            let mut time = 0.0;
+            let mut draw = |app: &mut App, events: Vec<egui::Event>| {
+                time += 1.0;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(1000.0, 600.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| album_hero(app, ui, &single, &tracks, None),
+                );
+                output.textures_delta.clear();
+                let mut found = Vec::new();
+                output
+                    .shapes
+                    .iter()
+                    .for_each(|clipped| texts(&clipped.shape, &mut found));
+                found
+            };
+            let year = draw(&mut app, Vec::new())
+                .into_iter()
+                .find_map(|(text, pos)| (text == "2026").then_some(pos))
+                .expect("the byline shows the year");
+            for _ in 0..3 {
+                draw(&mut app, vec![egui::Event::PointerMoved(year)]);
+            }
+            let shown = draw(&mut app, vec![egui::Event::PointerMoved(year)]);
+            app.backend.shutdown();
+            shown.into_iter().map(|(text, _)| text).collect()
+        }
+
+        let shown = hovering_the_year("2026-10-05");
+        assert!(shown.iter().any(|text| text == "Oct 5, 2026"), "{shown:?}");
+        // Known only to the month or the year: the tooltip gives the year.
+        for date in ["2026-10", "2026"] {
+            let shown = hovering_the_year(date);
+            assert_eq!(
+                shown.iter().filter(|text| *text == "2026").count(),
+                2,
+                "{date}: {shown:?}"
+            );
+        }
     }
 
     #[test]
@@ -2706,6 +2828,7 @@ mod tests {
                             show_cover: false,
                             show_added: false,
                             show_added_by: false,
+                            show_plays: false,
                             page: Page::Playlist("retry".into()),
                             loading: false,
                             error: Some("Offline"),
@@ -2793,6 +2916,7 @@ mod tests {
                     show_cover: false,
                     show_added: false,
                     show_added_by: false,
+                    show_plays: false,
                     page: Page::Playlist("filtered".into()),
                     loading: false,
                     error: None,
@@ -3269,6 +3393,7 @@ mod tests {
                                 show_cover: true,
                                 show_added: false,
                                 show_added_by: false,
+                                show_plays: false,
                                 page: Page::Playlist("test".into()),
                                 loading: false,
                                 error: None,

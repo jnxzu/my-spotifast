@@ -3070,9 +3070,9 @@ msgstr "Велике вікно"
 msgid "Song info"
 msgstr "Відомості про пісню"
 
-#: src/ui/winamp/mod.rs:878
-msgid "Size: 2x, 3x, 4x"
-msgstr "Розмір: 2x, 3x, 4x"
+#: src/ui/winamp/mod.rs
+msgid "Size: 1x, 2x, 3x, 4x"
+msgstr "Розмір: 1x, 2x, 3x, 4x"
 
 #: src/ui/winamp/mod.rs:897
 msgid "Visualisation"
@@ -3422,3 +3422,48 @@ msgstr "Видалити «{name}»"
 #: src/app.rs
 msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
 msgstr "Спочатку завантажте весь плейліст. Повторювані треки потрібно видаляти у Spotify."
+
+#: src/model.rs
+msgid "Last 4 weeks"
+msgstr "Останні 4 тижні"
+
+#: src/model.rs
+msgid "Last 6 months"
+msgstr "Останні 6 місяців"
+
+#: src/model.rs
+msgid "Past year"
+msgstr "Останній рік"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 4 weeks."
+msgstr "Обчислено за вашими прослуховуваннями приблизно за останні 4 тижні."
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 6 months."
+msgstr "Обчислено за вашими прослуховуваннями приблизно за останні 6 місяців."
+
+#: src/model.rs
+msgid "Calculated from several years of listening history."
+msgstr "Обчислено за історією прослуховувань за кілька років."
+
+#: src/ui/login.rs
+msgid "Open Spotify's developer dashboard."
+msgstr "Відкрийте панель розробника Spotify."
+
+#: src/ui/login.rs
+msgid "Click Create app. Any name will do."
+msgstr "Натисніть «Create app». Назва може бути будь-якою."
+
+#: src/ui/login.rs
+msgid "Under Redirect URIs, add exactly:"
+msgstr "У полі «Redirect URIs» додайте точно цю адресу:"
+
+#: src/ui/login.rs
+msgid "Tick Web API, accept the terms, and save."
+msgstr "Позначте «Web API», прийміть умови та збережіть."
+
+#: src/ui/widgets.rs
+msgctxt "column heading"
+msgid "PLAYS"
+msgstr "ПРОСЛУХОВУВАННЯ"

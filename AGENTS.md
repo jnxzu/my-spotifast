@@ -4,6 +4,8 @@ This personal fork is `jnxzu/my-spotifast`, locally `D:/Work/code/my-spotifast`.
 The app is named Spotifast J; the executable and existing data paths stay
 `spotifast` to preserve sign-in and settings. The sidebar is intentionally pins
 only. Do not restore upstream library controls or unpinned items.
+Bring in upstream updates wherever practical, adapting them to preserve Spotifast J's custom behavior and avoiding changes that undo its tweaks.
+
 Dev Home displays `my-spotifast`; its preserved internal tracker ID is
 `spotifast`, so use that ID with the Dev Home CLI.
 

@@ -3020,9 +3020,9 @@ msgstr "大きいウインドウ"
 msgid "Song info"
 msgstr "曲の情報"
 
-#: src/ui/winamp/mod.rs:878
-msgid "Size: 2x, 3x, 4x"
-msgstr "サイズ：2x、3x、4x"
+#: src/ui/winamp/mod.rs
+msgid "Size: 1x, 2x, 3x, 4x"
+msgstr "サイズ：1x、2x、3x、4x"
 
 #: src/ui/winamp/mod.rs:897
 msgid "Visualisation"
@@ -3378,3 +3378,48 @@ msgstr "「{name}」を削除"
 #: src/app.rs
 msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
 msgstr "まずプレイリスト全体を読み込んでください。重複する曲はSpotifyで削除してください。"
+
+#: src/model.rs
+msgid "Last 4 weeks"
+msgstr "過去4週間"
+
+#: src/model.rs
+msgid "Last 6 months"
+msgstr "過去6か月"
+
+#: src/model.rs
+msgid "Past year"
+msgstr "過去1年"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 4 weeks."
+msgstr "過去約4週間の再生履歴から算出しています。"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 6 months."
+msgstr "過去約6か月の再生履歴から算出しています。"
+
+#: src/model.rs
+msgid "Calculated from several years of listening history."
+msgstr "数年分の再生履歴から算出しています。"
+
+#: src/ui/login.rs
+msgid "Open Spotify's developer dashboard."
+msgstr "Spotifyの開発者ダッシュボードを開きます。"
+
+#: src/ui/login.rs
+msgid "Click Create app. Any name will do."
+msgstr "「Create app」をクリックします。名前は何でも構いません。"
+
+#: src/ui/login.rs
+msgid "Under Redirect URIs, add exactly:"
+msgstr "「Redirect URIs」に次のアドレスを正確に追加します："
+
+#: src/ui/login.rs
+msgid "Tick Web API, accept the terms, and save."
+msgstr "「Web API」にチェックを入れ、規約に同意して保存します。"
+
+#: src/ui/widgets.rs
+msgctxt "column heading"
+msgid "PLAYS"
+msgstr "再生回数"

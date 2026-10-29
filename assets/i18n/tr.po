@@ -3049,9 +3049,9 @@ msgstr "Büyük pencere"
 msgid "Song info"
 msgstr "Şarkı bilgisi"
 
-#: src/ui/winamp/mod.rs:878
-msgid "Size: 2x, 3x, 4x"
-msgstr "Boyut: 2x, 3x, 4x"
+#: src/ui/winamp/mod.rs
+msgid "Size: 1x, 2x, 3x, 4x"
+msgstr "Boyut: 1x, 2x, 3x, 4x"
 
 #: src/ui/winamp/mod.rs:897
 msgid "Visualisation"
@@ -3397,3 +3397,48 @@ msgstr "“{name}” ayarını sil"
 #: src/app.rs
 msgid "Load the full playlist first. Repeated songs must be removed in Spotify."
 msgstr "Önce çalma listesinin tamamını yükleyin. Tekrarlanan şarkılar Spotify üzerinden kaldırılmalıdır."
+
+#: src/model.rs
+msgid "Last 4 weeks"
+msgstr "Son 4 hafta"
+
+#: src/model.rs
+msgid "Last 6 months"
+msgstr "Son 6 ay"
+
+#: src/model.rs
+msgid "Past year"
+msgstr "Son 1 yıl"
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 4 weeks."
+msgstr "Yaklaşık son 4 haftadaki dinlemelerinizden hesaplanır."
+
+#: src/model.rs
+msgid "Calculated from your listening over approximately the last 6 months."
+msgstr "Yaklaşık son 6 aydaki dinlemelerinizden hesaplanır."
+
+#: src/model.rs
+msgid "Calculated from several years of listening history."
+msgstr "Birkaç yıllık dinleme geçmişinizden hesaplanır."
+
+#: src/ui/login.rs
+msgid "Open Spotify's developer dashboard."
+msgstr "Spotify geliştirici panelini açın."
+
+#: src/ui/login.rs
+msgid "Click Create app. Any name will do."
+msgstr "“Create app” düğmesine tıklayın. Herhangi bir ad olur."
+
+#: src/ui/login.rs
+msgid "Under Redirect URIs, add exactly:"
+msgstr "“Redirect URIs” altına tam olarak şunu ekleyin:"
+
+#: src/ui/login.rs
+msgid "Tick Web API, accept the terms, and save."
+msgstr "“Web API” kutusunu işaretleyin, koşulları kabul edin ve kaydedin."
+
+#: src/ui/widgets.rs
+msgctxt "column heading"
+msgid "PLAYS"
+msgstr "DİNLENME"
